@@ -13,6 +13,7 @@ dist-ssr
 *.local
 .env
 .env.*
+!.env.example
 server/casino.db
 
 # Editor directories and files

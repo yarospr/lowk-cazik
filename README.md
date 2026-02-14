@@ -1,20 +1,62 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+﻿# lowk-cazik
 
-# Run and deploy your AI Studio app
+Telegram WebApp casino with persistent accounts bound to `telegram_id`.
 
-This contains everything you need to run your app locally.
+## What was fixed
 
-View your app in AI Studio: https://ai.studio/apps/drive/1bh2zW5SHEqg6kojXSTI7S5qc6aXZTiXP
+- Account identity is now tied to Telegram user id (`telegram_id`), so one Telegram account no longer creates a new in-game account on each launch.
+- Added server API + SQLite database (`server/casino.db`) for persistent state.
+- Added local fallback mode for regular browser launches (without Telegram context).
+- Added migration from old keys `ccc_balance`/`ccc_inventory` to scoped storage keys.
 
-## Run Locally
+## Database restore (if DB file was deleted)
 
-**Prerequisites:**  Node.js
+1. Open terminal in project root.
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Start server once:
+   ```bash
+   npm run dev:server
+   ```
 
+After server start, a new SQLite file is created automatically:
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- `server/casino.db`
+
+No manual SQL needed for restore in this version.
+
+## What to open and what to fill in
+
+1. Open project file `.env` (create it from `.env.example`):
+   ```bash
+   copy .env.example .env
+   ```
+2. In `.env` fill:
+   - `TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN_FROM_BOTFATHER`
+   - Optional: `DEFAULT_BALANCE=1000`
+
+3. In Telegram open `@BotFather`, run `/setmenubutton` for your bot and set your WebApp URL.
+4. In Telegram open your bot and launch the WebApp from the menu button.
+
+## Run full app locally
+
+```bash
+npm install
+npm run dev
+```
+
+This starts:
+
+- Frontend: `http://localhost:3000`
+- API: `http://localhost:3001`
+
+## API check
+
+Open in browser:
+
+- `http://localhost:3001/api/health`
+
+If server is OK, you will see JSON with `ok: true` and DB path.
+

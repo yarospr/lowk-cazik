@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Menu, ChevronRight, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
+import { createOrLoadTelegramAccount, saveTelegramAccountState, TelegramWebAppUser } from './api';
 
 // --- UTILS ---
 
@@ -81,6 +82,115 @@ const casesByType = CASES_DATA.reduce((acc, c) => {
   acc[c.type].push(c);
   return acc;
 }, {} as Record<string, Case[]>);
+
+const DEVICE_ID_KEY = 'ccc_device_id';
+const LEGACY_BALANCE_KEY = 'ccc_balance';
+const LEGACY_INVENTORY_KEY = 'ccc_inventory';
+
+type StorageKeys = {
+  balance: string;
+  inventory: string;
+};
+
+type LocalStateSnapshot = {
+  balance: number;
+  inventory: InventoryItem[];
+};
+
+type TelegramWebAppState = {
+  initData?: string;
+  initDataUnsafe?: {
+    user?: TelegramWebAppUser;
+  };
+  ready?: () => void;
+  expand?: () => void;
+};
+
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: TelegramWebAppState;
+    };
+  }
+}
+
+const getTelegramWebApp = (): TelegramWebAppState | null => {
+  return window.Telegram?.WebApp || null;
+};
+
+const buildStorageKeys = (scope: string): StorageKeys => {
+  return {
+    balance: `ccc_balance_${scope}`,
+    inventory: `ccc_inventory_${scope}`,
+  };
+};
+
+const getOrCreateDeviceId = (): string => {
+  const existing = localStorage.getItem(DEVICE_ID_KEY);
+  if (existing) {
+    return existing;
+  }
+
+  const generated = generateUUID();
+  localStorage.setItem(DEVICE_ID_KEY, generated);
+  return generated;
+};
+
+const parseInventory = (raw: string | null): InventoryItem[] => {
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const parseBalance = (raw: string | null): number => {
+  if (!raw) {
+    return INITIAL_BALANCE;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : INITIAL_BALANCE;
+};
+
+const writeLocalState = (keys: StorageKeys, balance: number, inventory: InventoryItem[]) => {
+  localStorage.setItem(keys.balance, balance.toString());
+  localStorage.setItem(keys.inventory, JSON.stringify(inventory));
+};
+
+const readLocalState = (keys: StorageKeys): LocalStateSnapshot => {
+  const scopedBalance = localStorage.getItem(keys.balance);
+  const scopedInventory = localStorage.getItem(keys.inventory);
+
+  if (scopedBalance !== null || scopedInventory !== null) {
+    return {
+      balance: parseBalance(scopedBalance),
+      inventory: parseInventory(scopedInventory),
+    };
+  }
+
+  const legacyBalance = localStorage.getItem(LEGACY_BALANCE_KEY);
+  const legacyInventory = localStorage.getItem(LEGACY_INVENTORY_KEY);
+
+  if (legacyBalance !== null || legacyInventory !== null) {
+    const migrated = {
+      balance: parseBalance(legacyBalance),
+      inventory: parseInventory(legacyInventory),
+    };
+    writeLocalState(keys, migrated.balance, migrated.inventory);
+    return migrated;
+  }
+
+  return {
+    balance: INITIAL_BALANCE,
+    inventory: [],
+  };
+};
 
 // --- COMPONENTS ---
 
@@ -303,14 +413,13 @@ const QuantitySelector = ({ value, onChange }: { value: number, onChange: (val: 
 // --- MAIN APP ---
 
 export default function App() {
-  const [balance, setBalance] = useState<number>(() => {
-    const saved = localStorage.getItem('ccc_balance');
-    return saved ? parseInt(saved, 10) : INITIAL_BALANCE;
-  });
-
-  const [inventory, setInventory] = useState<InventoryItem[]>(() => {
-    const saved = localStorage.getItem('ccc_inventory');
-    return saved ? JSON.parse(saved) : [];
+  const [balance, setBalance] = useState<number>(INITIAL_BALANCE);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [isHydrating, setIsHydrating] = useState(true);
+  const [syncMode, setSyncMode] = useState<'local' | 'server'>('local');
+  const [telegramId, setTelegramId] = useState<string | null>(null);
+  const [storageKeys, setStorageKeys] = useState<StorageKeys>(() => {
+    return buildStorageKeys(`device_${getOrCreateDeviceId()}`);
   });
 
   const [screen, setScreen] = useState<AppScreen>(AppScreen.GAMES_MENU);
@@ -331,11 +440,85 @@ export default function App() {
   const [rocketWinnings, setRocketWinnings] = useState<BaseItem | null>(null);
   const rocketRequestRef = useRef<number>();
   const rocketStartTimeRef = useRef<number>(0);
+  const saveTimeoutRef = useRef<number>();
 
   useEffect(() => {
-    localStorage.setItem('ccc_balance', balance.toString());
-    localStorage.setItem('ccc_inventory', JSON.stringify(inventory));
-  }, [balance, inventory]);
+    let isCancelled = false;
+
+    const bootstrapAccount = async () => {
+      const webApp = getTelegramWebApp();
+      webApp?.ready?.();
+      webApp?.expand?.();
+
+      const tgUser = webApp?.initDataUnsafe?.user;
+      const fallbackScope = tgUser?.id ? `tg_${tgUser.id}` : `device_${getOrCreateDeviceId()}`;
+      const fallbackKeys = buildStorageKeys(fallbackScope);
+
+      if (tgUser?.id) {
+        try {
+          const remoteState = await createOrLoadTelegramAccount(tgUser, webApp?.initData);
+          if (isCancelled) {
+            return;
+          }
+
+          const remoteKeys = buildStorageKeys(`tg_${remoteState.telegramId}`);
+          setStorageKeys(remoteKeys);
+          setBalance(remoteState.balance);
+          setInventory(remoteState.inventory);
+          setSyncMode('server');
+          setTelegramId(remoteState.telegramId);
+          writeLocalState(remoteKeys, remoteState.balance, remoteState.inventory);
+          setIsHydrating(false);
+          return;
+        } catch (error) {
+          console.error('Failed to load account from API, local fallback will be used.', error);
+        }
+      }
+
+      if (isCancelled) {
+        return;
+      }
+
+      const localState = readLocalState(fallbackKeys);
+      setStorageKeys(fallbackKeys);
+      setBalance(localState.balance);
+      setInventory(localState.inventory);
+      setSyncMode('local');
+      setTelegramId(null);
+      setIsHydrating(false);
+    };
+
+    bootstrapAccount();
+
+    return () => {
+      isCancelled = true;
+      if (saveTimeoutRef.current) {
+        window.clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isHydrating) {
+      return;
+    }
+
+    writeLocalState(storageKeys, balance, inventory);
+
+    if (syncMode !== 'server' || !telegramId) {
+      return;
+    }
+
+    if (saveTimeoutRef.current) {
+      window.clearTimeout(saveTimeoutRef.current);
+    }
+
+    saveTimeoutRef.current = window.setTimeout(() => {
+      saveTelegramAccountState(telegramId, balance, inventory).catch((error) => {
+        console.error('Failed to save state to API', error);
+      });
+    }, 500);
+  }, [balance, inventory, isHydrating, storageKeys, syncMode, telegramId]);
 
   useEffect(() => {
     if (screen === AppScreen.PROFILE) setActiveTab('profile');
@@ -865,6 +1048,15 @@ export default function App() {
           )}
         </div>
 
+        <div className="px-4 py-2 border-b border-slate-800 bg-slate-950">
+          <div className="text-xs text-slate-400">
+            {telegramId ? `Telegram ID: ${telegramId}` : 'Telegram ID: not detected (local mode)'}
+          </div>
+          <div className={`text-xs font-semibold ${syncMode === 'server' ? 'text-emerald-400' : 'text-amber-400'}`}>
+            {syncMode === 'server' ? 'Sync: SQLite API' : 'Sync: localStorage'}
+          </div>
+        </div>
+
         <div className="p-4 bg-slate-900 border-b border-slate-800 flex justify-between items-center shadow-md z-10">
           <div>
              <div className="text-xs text-slate-500 uppercase font-bold tracking-wider">Предметов</div>
@@ -930,6 +1122,17 @@ export default function App() {
       </div>
     );
   };
+
+  if (isHydrating) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white max-w-md mx-auto flex items-center justify-center">
+        <div className="text-center px-6">
+          <div className="text-lg font-bold mb-2">Загрузка аккаунта</div>
+          <div className="text-sm text-slate-400">Подключаем Telegram-профиль и базу данных...</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-hidden">

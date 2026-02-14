@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Menu, ChevronRight, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
-import { createOrLoadTelegramAccount, saveTelegramAccountState, TelegramWebAppUser } from './api';
+import { createOrLoadTelegramAccount, isCloudDbConfigured, saveTelegramAccountState, TelegramWebAppUser } from './api';
 
 // --- UTILS ---
 
@@ -454,24 +454,24 @@ export default function App() {
       const fallbackScope = tgUser?.id ? `tg_${tgUser.id}` : `device_${getOrCreateDeviceId()}`;
       const fallbackKeys = buildStorageKeys(fallbackScope);
 
-      if (tgUser?.id) {
+      if (tgUser?.id && isCloudDbConfigured()) {
         try {
-          const remoteState = await createOrLoadTelegramAccount(tgUser, webApp?.initData);
+          const cloudState = await createOrLoadTelegramAccount(tgUser, webApp?.initData);
           if (isCancelled) {
             return;
           }
 
-          const remoteKeys = buildStorageKeys(`tg_${remoteState.telegramId}`);
-          setStorageKeys(remoteKeys);
-          setBalance(remoteState.balance);
-          setInventory(remoteState.inventory);
+          const cloudKeys = buildStorageKeys(`tg_${cloudState.telegramId}`);
+          setStorageKeys(cloudKeys);
+          setBalance(cloudState.balance);
+          setInventory(cloudState.inventory);
           setSyncMode('server');
-          setTelegramId(remoteState.telegramId);
-          writeLocalState(remoteKeys, remoteState.balance, remoteState.inventory);
+          setTelegramId(cloudState.telegramId);
+          writeLocalState(cloudKeys, cloudState.balance, cloudState.inventory);
           setIsHydrating(false);
           return;
         } catch (error) {
-          console.error('Failed to load account from API, local fallback will be used.', error);
+          console.error('Failed to load account from Supabase, local fallback will be used.', error);
         }
       }
 
@@ -515,7 +515,7 @@ export default function App() {
 
     saveTimeoutRef.current = window.setTimeout(() => {
       saveTelegramAccountState(telegramId, balance, inventory).catch((error) => {
-        console.error('Failed to save state to API', error);
+        console.error('Failed to save state to Supabase', error);
       });
     }, 500);
   }, [balance, inventory, isHydrating, storageKeys, syncMode, telegramId]);
@@ -1053,7 +1053,7 @@ export default function App() {
             {telegramId ? `Telegram ID: ${telegramId}` : 'Telegram ID: not detected (local mode)'}
           </div>
           <div className={`text-xs font-semibold ${syncMode === 'server' ? 'text-emerald-400' : 'text-amber-400'}`}>
-            {syncMode === 'server' ? 'Sync: SQLite API' : 'Sync: localStorage'}
+            {syncMode === 'server' ? 'Sync: Supabase Cloud DB' : 'Sync: localStorage'}
           </div>
         </div>
 
@@ -1128,7 +1128,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-950 text-white max-w-md mx-auto flex items-center justify-center">
         <div className="text-center px-6">
           <div className="text-lg font-bold mb-2">Загрузка аккаунта</div>
-          <div className="text-sm text-slate-400">Подключаем Telegram-профиль и базу данных...</div>
+          <div className="text-sm text-slate-400">Подключаем Telegram-профиль и облачную базу...</div>
         </div>
       </div>
     );

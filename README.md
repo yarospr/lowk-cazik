@@ -1,62 +1,81 @@
-﻿# lowk-cazik
+# lowk-cazik (GitHub Pages + Supabase Free)
 
-Telegram WebApp casino with persistent accounts bound to `telegram_id`.
+This version is made for:
+- Frontend: GitHub Pages
+- Database: Supabase (free cloud PostgreSQL)
 
-## What was fixed
+## Why this setup
 
-- Account identity is now tied to Telegram user id (`telegram_id`), so one Telegram account no longer creates a new in-game account on each launch.
-- Added server API + SQLite database (`server/casino.db`) for persistent state.
-- Added local fallback mode for regular browser launches (without Telegram context).
-- Added migration from old keys `ccc_balance`/`ccc_inventory` to scoped storage keys.
+GitHub Pages cannot run backend code (Node/SQLite). It can host only static files.
+So game progress must be stored in a cloud DB. Here we use Supabase Free.
 
-## Database restore (if DB file was deleted)
+## Step-by-step setup (for beginners)
 
-1. Open terminal in project root.
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start server once:
-   ```bash
-   npm run dev:server
-   ```
+### 1. Create free Supabase project
 
-After server start, a new SQLite file is created automatically:
+1. Open: https://supabase.com/
+2. Sign up / log in.
+3. Click `New project`.
+4. Fill project name and DB password.
+5. Wait until project status becomes ready.
 
-- `server/casino.db`
+### 2. Create table in Supabase
 
-No manual SQL needed for restore in this version.
+1. In Supabase dashboard open `SQL Editor`.
+2. Create `New query`.
+3. Open file `supabase/schema.sql` in this repo.
+4. Copy all SQL and run it.
 
-## What to open and what to fill in
+This creates table `public.players` where progress is stored by `telegram_id`.
 
-1. Open project file `.env` (create it from `.env.example`):
-   ```bash
-   copy .env.example .env
-   ```
-2. In `.env` fill:
-   - `TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN_FROM_BOTFATHER`
-   - Optional: `DEFAULT_BALANCE=1000`
+### 3. Copy Supabase keys
 
-3. In Telegram open `@BotFather`, run `/setmenubutton` for your bot and set your WebApp URL.
-4. In Telegram open your bot and launch the WebApp from the menu button.
+In Supabase dashboard open `Project Settings` -> `API` and copy:
+- `Project URL`
+- `anon public` key
 
-## Run full app locally
+### 4. Put keys into local env
+
+In project folder run:
+
+```bash
+copy .env.example .env.local
+```
+
+Then open `.env.local` and set:
+
+```env
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_ANON_PUBLIC_KEY
+VITE_DEFAULT_BALANCE=1000
+```
+
+### 5. Run locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-This starts:
+### 6. Deploy to GitHub Pages
 
-- Frontend: `http://localhost:3000`
-- API: `http://localhost:3001`
+Important: GitHub Pages build also needs these env vars.
+If you deploy with GitHub Actions, add repository secrets:
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+- `VITE_DEFAULT_BALANCE` (optional)
 
-## API check
+Then build/publish frontend as usual.
 
-Open in browser:
+### 7. Telegram BotFather WebApp URL
 
-- `http://localhost:3001/api/health`
+In `@BotFather` set menu button URL to your GitHub Pages frontend URL.
+Example:
 
-If server is OK, you will see JSON with `ok: true` and DB path.
+`https://your-username.github.io/lowk-cazik/`
 
+## Notes
+
+- If Supabase keys are not set, app falls back to localStorage mode.
+- In localStorage mode progress is only on one device/browser.
+- In Supabase mode progress is cloud-synced by Telegram user id.

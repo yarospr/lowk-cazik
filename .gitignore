@@ -14,7 +14,6 @@ dist-ssr
 .env
 .env.*
 !.env.example
-server/casino.db
 
 # Editor directories and files
 .vscode/*

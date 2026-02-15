@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r15';
+const BUILD_MARKER = 'v5069015-r16';
 const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || '').trim().replace(/^@/, '');
 const OFFER_ID_PREFIX = 'offer_';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
@@ -119,6 +119,14 @@ const formatMoney = (amount: number) => {
 const toSafeNumber = (value: unknown): number => {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const sanitizePositiveIntegerInput = (raw: string): string => {
+  const digitsOnly = raw.replace(/\D+/g, '');
+  if (!digitsOnly) return '';
+  const withoutLeadingZeros = digitsOnly.replace(/^0+/, '');
+  const normalized = withoutLeadingZeros || '0';
+  return normalized.slice(0, 12);
 };
 
 const getItemName = (item: Partial<BaseItem> | InventoryItem): string => {
@@ -1806,9 +1814,13 @@ export default function App() {
 
   const handleStartBusiness = () => {
     if (businessState.active) return;
-    const investment = Math.max(1, Math.floor(toSafeNumber(businessInvestmentInput)));
+    const parsed = Math.floor(toSafeNumber(businessInvestmentInput));
+    const investment = Number.isFinite(parsed) ? parsed : 0;
+    if (investment < 1) {
+      setBusinessInvestmentInput('1');
+      return;
+    }
     if (balance < investment) {
-      alert('\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u0437\u0432\u0435\u0437\u0434 \u0434\u043b\u044f \u0432\u043a\u043b\u0430\u0434\u0430');
       return;
     }
 
@@ -2289,6 +2301,11 @@ export default function App() {
 
   const renderBusinessMenu = () => {
     const canStart = !businessState.active;
+    const parsedInvestment = Math.floor(toSafeNumber(businessInvestmentInput));
+    const normalizedInvestment = Number.isFinite(parsedInvestment) ? parsedInvestment : 0;
+    const hasValidInvestment = normalizedInvestment >= 1;
+    const hasEnoughBalance = balance >= normalizedInvestment;
+    const canStartBusiness = canStart && hasValidInvestment && hasEnoughBalance;
     const pendingReward = businessState.pendingReward;
 
     return (
@@ -2306,14 +2323,20 @@ export default function App() {
             <div className="flex items-center gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800 focus-within:border-yellow-500">
               <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
               <input
-                type="number"
-                min={1}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 value={businessInvestmentInput}
-                onChange={(e) => setBusinessInvestmentInput(e.target.value)}
+                onChange={(e) => setBusinessInvestmentInput(sanitizePositiveIntegerInput(e.target.value))}
                 className="bg-transparent text-white font-mono text-xl outline-none w-full"
                 disabled={!canStart}
               />
             </div>
+            {canStart && hasValidInvestment && !hasEnoughBalance && (
+              <div className="mt-2 text-xs text-red-400 font-bold">
+                {'\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u0437\u0432\u0435\u0437\u0434 \u0434\u043b\u044f \u0442\u0430\u043a\u043e\u0433\u043e \u0432\u043a\u043b\u0430\u0434\u0430'}
+              </div>
+            )}
             <div className="grid grid-cols-4 gap-2 mt-3">
               {[1000, 5000, 10000, 50000].map((amount) => (
                 <button
@@ -2327,7 +2350,7 @@ export default function App() {
               ))}
             </div>
 
-            <Button onClick={handleStartBusiness} disabled={!canStart} className="w-full mt-4 py-4 text-lg">
+            <Button onClick={handleStartBusiness} disabled={!canStartBusiness} className="w-full mt-4 py-4 text-lg">
               {canStart ? '\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0431\u0438\u0437\u043d\u0435\u0441' : '\u0411\u0438\u0437\u043d\u0435\u0441 \u0443\u0436\u0435 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442'}
             </Button>
           </div>

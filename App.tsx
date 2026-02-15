@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r2';
+const BUILD_MARKER = 'v5069015-r3';
 
 const getItemById = (id: number): BaseItem | undefined => {
   return ITEMS_DATA["items_db"].find((i) => i.id === id);
@@ -47,6 +47,26 @@ const getRarityGlow = (rarity: string) => {
 
 const formatMoney = (amount: number) => {
   return new Intl.NumberFormat('ru-RU').format(Math.floor(amount));
+};
+const toSafeNumber = (value: unknown): number => {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+const getItemPrice = (item: Partial<BaseItem> | InventoryItem | null | undefined): number => {
+  if (!item) return 0;
+  const record = item as Record<string, unknown>;
+  const directPrice = toSafeNumber(record.price);
+  if (directPrice > 0) return directPrice;
+  const ignoredNumericKeys = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
+  for (const [key, value] of Object.entries(record)) {
+    if (ignoredNumericKeys.has(key)) continue;
+    const parsed = toSafeNumber(value);
+    if (parsed > 0) return parsed;
+  }
+  return 0;
+};
+const sumItemPrices = (items: Array<Partial<BaseItem> | InventoryItem>): number => {
+  return items.reduce((acc, item) => acc + getItemPrice(item), 0);
 };
 
 const generateUUID = () => {
@@ -883,7 +903,7 @@ export default function App() {
 
   const sellSelected = () => {
     const itemsToSell = inventory.filter(i => selectedInventoryIds.has(i.uniqueId));
-    const totalValue = itemsToSell.reduce((acc, i) => acc + i.цена, 0);
+    const totalValue = sumItemPrices(itemsToSell);
     
     setInventory(prev => prev.filter(i => !selectedInventoryIds.has(i.uniqueId)));
     setBalance(prev => prev + totalValue);
@@ -901,7 +921,7 @@ export default function App() {
     window.setTimeout(() => {
       let totalValue = 0;
       for (let i = 0; i < inventorySnapshot.length; i += 1) {
-        totalValue += inventorySnapshot[i].цена;
+        totalValue += getItemPrice(inventorySnapshot[i]);
       }
 
       setInventory([]);
@@ -1794,9 +1814,9 @@ export default function App() {
   }
 
   const renderProfile = () => {
-    const sellAmount = isSellAllPending ? 0 : inventory.filter(i => selectedInventoryIds.has(i.uniqueId)).reduce((acc, i) => acc + i.цена, 0);
+    const sellAmount = isSellAllPending ? 0 : sumItemPrices(inventory.filter(i => selectedInventoryIds.has(i.uniqueId)));
     const selectedCount = selectedInventoryIds.size;
-    const totalInvValue = isSellAllPending ? 0 : inventory.reduce((acc, i) => acc + i.цена, 0);
+    const totalInvValue = isSellAllPending ? 0 : sumItemPrices(inventory);
 
     const toggleSelection = (id: string) => {
       const newSet = new Set(selectedInventoryIds);
@@ -1983,8 +2003,4 @@ export default function App() {
     </div>
   );
 }
-
-
-
-
 

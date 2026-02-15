@@ -6,7 +6,9 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r14';
+const BUILD_MARKER = 'v5069015-r15';
+const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || '').trim().replace(/^@/, '');
+const OFFER_ID_PREFIX = 'offer_';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -297,8 +299,10 @@ type TelegramUser = {
 };
 
 type TelegramWebAppState = {
+  initData?: string;
   initDataUnsafe?: {
     user?: TelegramUser;
+    start_param?: string;
   };
   ready?: () => void;
   expand?: () => void;
@@ -355,6 +359,25 @@ declare global {
 }
 
 const LOCAL_PLAYER_ID_KEY = 'ccc_player_uuid';
+
+const normalizeOfferId = (raw: unknown): string | null => {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  return value.startsWith(OFFER_ID_PREFIX) ? value : null;
+};
+
+const encodeOfferStartParam = (offerId: string): string => {
+  if (!offerId.startsWith(OFFER_ID_PREFIX)) return offerId;
+  return `o_${offerId.slice(OFFER_ID_PREFIX.length)}`;
+};
+
+const parseOfferStartParam = (raw: unknown): string | null => {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  if (value.startsWith(OFFER_ID_PREFIX)) return value;
+  if (value.startsWith('o_')) return `${OFFER_ID_PREFIX}${value.slice(2)}`;
+  return null;
+};
 
 const getOrCreateLocalPlayerId = (): string => {
   const existing = localStorage.getItem(LOCAL_PLAYER_ID_KEY);
@@ -785,7 +808,21 @@ export default function App() {
   const initialOfferId = useMemo(() => {
     try {
       const url = new URL(window.location.href);
-      return url.searchParams.get('offer');
+      const directParam = normalizeOfferId(url.searchParams.get('offer'));
+      if (directParam) return directParam;
+
+      const startCandidates: Array<string | null | undefined> = [
+        url.searchParams.get('startapp'),
+        url.searchParams.get('start'),
+        url.searchParams.get('tgWebAppStartParam'),
+        window.Telegram?.WebApp?.initDataUnsafe?.start_param,
+      ];
+
+      for (const candidate of startCandidates) {
+        const parsed = parseOfferStartParam(candidate);
+        if (parsed) return parsed;
+      }
+      return null;
     } catch {
       return null;
     }
@@ -875,6 +912,22 @@ export default function App() {
     pendingOfferIdRef.current = initialOfferId;
   }, [initialOfferId]);
 
+  useEffect(() => {
+    try {
+      const current = new URL(window.location.href);
+      const clean = new URL(`${current.origin}${current.pathname}`);
+      if (initialOfferId) {
+        clean.searchParams.set('offer', initialOfferId);
+      }
+
+      if (current.origin !== clean.origin || current.pathname !== clean.pathname || current.search !== clean.search) {
+        window.history.replaceState({}, '', clean.toString());
+      }
+    } catch {
+      // Ignore malformed URL states
+    }
+  }, [initialOfferId]);
+
   // --- INITIALIZATION ---
   useEffect(() => {
     const initPlayer = async () => {
@@ -882,7 +935,8 @@ export default function App() {
       tg?.ready?.();
       tg?.expand?.();
       const tgUser = tg?.initDataUnsafe?.user;
-      const isTg = Boolean(tgUser?.id);
+      const isTelegramRuntime = /Telegram/i.test(window.navigator.userAgent || '');
+      const isTg = Boolean(tgUser?.id) && isTelegramRuntime;
       setIsTelegramUser(isTg);
       const userId = isTg ? String(tgUser?.id) : getOrCreateLocalPlayerId();
 
@@ -1177,8 +1231,16 @@ export default function App() {
   };
 
   const buildOfferLink = useCallback((offerId: string) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set('offer', offerId);
+    const normalizedOfferId = normalizeOfferId(offerId);
+    if (!normalizedOfferId) return '';
+
+    if (TELEGRAM_BOT_USERNAME) {
+      const startParam = encodeOfferStartParam(normalizedOfferId);
+      return `https://t.me/${TELEGRAM_BOT_USERNAME}/app?startapp=${encodeURIComponent(startParam)}`;
+    }
+
+    const url = new URL(`${window.location.origin}${window.location.pathname}`);
+    url.searchParams.set('offer', normalizedOfferId);
     return url.toString();
   }, []);
 

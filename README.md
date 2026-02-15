@@ -39,7 +39,10 @@ Then fill `.env.local`:
 VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 VITE_SUPABASE_ANON_KEY=YOUR_PUBLISHABLE_KEY
 VITE_DEFAULT_BALANCE=0
+VITE_TELEGRAM_BOT_USERNAME=YOUR_BOT_USERNAME_WITHOUT_AT
 ```
+
+`VITE_TELEGRAM_BOT_USERNAME` is used to generate market links in format `https://t.me/<bot>/app?startapp=...` so they open directly in Telegram WebApp.
 
 ## 4. Run
 

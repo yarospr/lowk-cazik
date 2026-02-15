@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Menu, ChevronRight, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info } from 'lucide-react';
-import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen } from './types';
+import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Menu, ChevronRight, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink } from 'lucide-react';
+import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
-import { createOrLoadTelegramAccount, isCloudDbConfigured, saveTelegramAccountState, TelegramWebAppUser } from './api';
+import { supabase } from './supabaseClient';
 
 // --- UTILS ---
 
@@ -77,33 +77,47 @@ const findClosestItemByPrice = (targetPrice: number): BaseItem => {
   });
 };
 
+const getRandomItemNearPrice = (targetPrice: number): BaseItem => {
+  const allItems = ITEMS_DATA["items_db"];
+  // Range: 0.7x to 1.3x price
+  const candidates = allItems.filter(i => i.цена >= targetPrice * 0.7 && i.цена <= targetPrice * 1.3);
+  
+  if (candidates.length > 0) {
+      const idx = Math.floor(Math.random() * candidates.length);
+      return candidates[idx];
+  }
+  return findClosestItemByPrice(targetPrice);
+}
+
 const casesByType = CASES_DATA.reduce((acc, c) => {
   if (!acc[c.type]) acc[c.type] = [];
   acc[c.type].push(c);
   return acc;
 }, {} as Record<string, Case[]>);
 
-const DEVICE_ID_KEY = 'ccc_device_id';
-const LEGACY_BALANCE_KEY = 'ccc_balance';
-const LEGACY_INVENTORY_KEY = 'ccc_inventory';
-
-type StorageKeys = {
-  balance: string;
-  inventory: string;
-};
-
-type LocalStateSnapshot = {
-  balance: number;
-  inventory: InventoryItem[];
+type TelegramUser = {
+  id: number;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
 };
 
 type TelegramWebAppState = {
-  initData?: string;
   initDataUnsafe?: {
-    user?: TelegramWebAppUser;
+    user?: TelegramUser;
   };
   ready?: () => void;
   expand?: () => void;
+};
+
+type PlayerDbRow = {
+  telegram_id?: string;
+  username?: string | null;
+  first_name?: string | null;
+  balance?: number | null;
+  inventory_json?: InventoryItem[] | string | null;
+  display_name?: string | null;
+  is_public?: boolean | null;
 };
 
 declare global {
@@ -114,81 +128,43 @@ declare global {
   }
 }
 
-const getTelegramWebApp = (): TelegramWebAppState | null => {
-  return window.Telegram?.WebApp || null;
-};
+const LOCAL_PLAYER_ID_KEY = 'ccc_player_uuid';
 
-const buildStorageKeys = (scope: string): StorageKeys => {
-  return {
-    balance: `ccc_balance_${scope}`,
-    inventory: `ccc_inventory_${scope}`,
-  };
-};
+const getOrCreateLocalPlayerId = (): string => {
+  const existing = localStorage.getItem(LOCAL_PLAYER_ID_KEY);
+  if (existing) return existing;
 
-const getOrCreateDeviceId = (): string => {
-  const existing = localStorage.getItem(DEVICE_ID_KEY);
-  if (existing) {
-    return existing;
-  }
-
-  const generated = generateUUID();
-  localStorage.setItem(DEVICE_ID_KEY, generated);
+  const generated = `local_${generateUUID()}`;
+  localStorage.setItem(LOCAL_PLAYER_ID_KEY, generated);
   return generated;
 };
 
-const parseInventory = (raw: string | null): InventoryItem[] => {
-  if (!raw) {
-    return [];
+const parseDbInventory = (raw: PlayerDbRow['inventory_json']): InventoryItem[] => {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   }
-
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  return [];
 };
 
-const parseBalance = (raw: string | null): number => {
-  if (!raw) {
-    return INITIAL_BALANCE;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : INITIAL_BALANCE;
-};
-
-const writeLocalState = (keys: StorageKeys, balance: number, inventory: InventoryItem[]) => {
-  localStorage.setItem(keys.balance, balance.toString());
-  localStorage.setItem(keys.inventory, JSON.stringify(inventory));
-};
-
-const readLocalState = (keys: StorageKeys): LocalStateSnapshot => {
-  const scopedBalance = localStorage.getItem(keys.balance);
-  const scopedInventory = localStorage.getItem(keys.inventory);
-
-  if (scopedBalance !== null || scopedInventory !== null) {
-    return {
-      balance: parseBalance(scopedBalance),
-      inventory: parseInventory(scopedInventory),
-    };
-  }
-
-  const legacyBalance = localStorage.getItem(LEGACY_BALANCE_KEY);
-  const legacyInventory = localStorage.getItem(LEGACY_INVENTORY_KEY);
-
-  if (legacyBalance !== null || legacyInventory !== null) {
-    const migrated = {
-      balance: parseBalance(legacyBalance),
-      inventory: parseInventory(legacyInventory),
-    };
-    writeLocalState(keys, migrated.balance, migrated.inventory);
-    return migrated;
-  }
+const mapDbRowToProfile = (row: PlayerDbRow): PlayerProfile => {
+  const id = String(row.telegram_id || '');
+  const resolvedName = row.display_name || row.first_name || row.username || '';
+  const balance = Number.isFinite(Number(row.balance)) ? Number(row.balance) : INITIAL_BALANCE;
 
   return {
-    balance: INITIAL_BALANCE,
-    inventory: [],
+    id,
+    name: resolvedName,
+    balance,
+    inventory: parseDbInventory(row.inventory_json),
+    telegram_id: id,
+    telegram_username: row.username || undefined,
+    is_public: Boolean(row.is_public),
   };
 };
 
@@ -240,6 +216,12 @@ const BottomNav = ({ activeTab, onTabChange }: { activeTab: string, onTabChange:
         <Gamepad2 className="w-6 h-6" />
       </button>
       <button 
+        onClick={() => onTabChange('leaderboard')}
+        className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all ${activeTab === 'leaderboard' ? 'text-yellow-400 bg-yellow-500/10' : 'text-slate-500 hover:text-slate-300'}`}
+      >
+        <Trophy className="w-6 h-6" />
+      </button>
+      <button 
         onClick={() => onTabChange('profile')}
         className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all ${activeTab === 'profile' ? 'text-yellow-400 bg-yellow-500/10' : 'text-slate-500 hover:text-slate-300'}`}
       >
@@ -249,11 +231,6 @@ const BottomNav = ({ activeTab, onTabChange }: { activeTab: string, onTabChange:
         className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all text-slate-700 cursor-not-allowed`}
       >
         <Banknote className="w-6 h-6" />
-      </button>
-      <button 
-        className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all text-slate-700 cursor-not-allowed`}
-      >
-        <Trophy className="w-6 h-6" />
       </button>
     </div>
   );
@@ -367,7 +344,7 @@ const RouletteScreen = ({
 
   return (
       <div className="flex flex-col h-screen bg-slate-950 overflow-hidden">
-        <div className="p-6 text-center sticky top-0 bg-slate-950/90 z-20 backdrop-blur border-b border-slate-800">
+        <div className="p-6 text-center sticky top-0 bg-slate-900/90 z-20 backdrop-blur border-b border-slate-800">
            <h2 className="text-2xl font-black text-white uppercase tracking-widest animate-pulse">Открытие...</h2>
         </div>
         <div className="flex-1 flex flex-col items-center gap-4 p-4 pb-20 overflow-y-auto custom-scrollbar w-full">
@@ -413,14 +390,20 @@ const QuantitySelector = ({ value, onChange }: { value: number, onChange: (val: 
 // --- MAIN APP ---
 
 export default function App() {
+  // SUPABASE & PLAYER STATE
+  const [playerProfile, setPlayerProfile] = useState<PlayerProfile | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [isTelegramUser, setIsTelegramUser] = useState(false);
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  
+  // Registration / Settings form state
+  const [inputName, setInputName] = useState('');
+  const [inputIsPublic, setInputIsPublic] = useState(false);
+
+  // GAME STATE
   const [balance, setBalance] = useState<number>(INITIAL_BALANCE);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
-  const [isHydrating, setIsHydrating] = useState(true);
-  const [syncMode, setSyncMode] = useState<'local' | 'server'>('local');
-  const [telegramId, setTelegramId] = useState<string | null>(null);
-  const [storageKeys, setStorageKeys] = useState<StorageKeys>(() => {
-    return buildStorageKeys(`device_${getOrCreateDeviceId()}`);
-  });
 
   const [screen, setScreen] = useState<AppScreen>(AppScreen.GAMES_MENU);
   const [selectedCase, setSelectedCase] = useState<Case | null>(null);
@@ -432,107 +415,373 @@ export default function App() {
   
   const [showSellAllConfirm, setShowSellAllConfirm] = useState(false);
 
+  // Leaderboard
+  const [leaderboard, setLeaderboard] = useState<PlayerProfile[]>([]);
+  const [isLoadingLeaderboard, setIsLoadingLeaderboard] = useState(false);
+
   // Rocket Game State
   const [rocketBetItem, setRocketBetItem] = useState<InventoryItem | null>(null);
   const [rocketState, setRocketState] = useState<'IDLE' | 'FLYING' | 'CRASHED' | 'CASHED_OUT'>('IDLE');
   const [rocketMultiplier, setRocketMultiplier] = useState(1.00);
   const [rocketCrashPoint, setRocketCrashPoint] = useState(0);
   const [rocketWinnings, setRocketWinnings] = useState<BaseItem | null>(null);
-  const rocketRequestRef = useRef<number>();
+  const rocketRequestRef = useRef<number | null>(null);
   const rocketStartTimeRef = useRef<number>(0);
-  const saveTimeoutRef = useRef<number>();
 
+  // Upgrader Game State
+  const [upgraderBetItem, setUpgraderBetItem] = useState<InventoryItem | null>(null);
+  const [upgraderTargetItem, setUpgraderTargetItem] = useState<BaseItem | null>(null);
+  const [upgraderSpinState, setUpgraderSpinState] = useState<'IDLE' | 'SPINNING' | 'WIN' | 'LOSE'>('IDLE');
+  const [upgraderRotation, setUpgraderRotation] = useState(0);
+
+  // Slots Game State
+  const [slotsBet, setSlotsBet] = useState<number>(1000);
+  const [slotsSpinState, setSlotsSpinState] = useState<'IDLE' | 'PRE_SPIN' | 'SPINNING' | 'FINISHED'>('IDLE');
+  const [slotsWinItem, setSlotsWinItem] = useState<BaseItem | null>(null);
+  const [slotsReelStrips, setSlotsReelStrips] = useState<{item: BaseItem, payout: number}[][]>([[], [], []]);
+
+  // --- INITIALIZATION ---
   useEffect(() => {
-    let isCancelled = false;
+    const initPlayer = async () => {
+      const tg = window.Telegram?.WebApp;
+      tg?.ready?.();
+      tg?.expand?.();
+      const tgUser = tg?.initDataUnsafe?.user;
+      const isTg = Boolean(tgUser?.id);
+      setIsTelegramUser(isTg);
+      const userId = isTg ? String(tgUser?.id) : getOrCreateLocalPlayerId();
 
-    const bootstrapAccount = async () => {
-      const webApp = getTelegramWebApp();
-      webApp?.ready?.();
-      webApp?.expand?.();
+      const { data, error } = await supabase
+        .from('players')
+        .select('*')
+        .eq('telegram_id', userId)
+        .maybeSingle();
 
-      const tgUser = webApp?.initDataUnsafe?.user;
-      const fallbackScope = tgUser?.id ? `tg_${tgUser.id}` : `device_${getOrCreateDeviceId()}`;
-      const fallbackKeys = buildStorageKeys(fallbackScope);
+      if (error) {
+        console.error('Failed to fetch player profile', error);
+      }
 
-      if (tgUser?.id && isCloudDbConfigured()) {
-        try {
-          const cloudState = await createOrLoadTelegramAccount(tgUser, webApp?.initData);
-          if (isCancelled) {
-            return;
-          }
+      let row: PlayerDbRow | null = data as PlayerDbRow | null;
+      if (!row) {
+        const insertPayload: PlayerDbRow = {
+          telegram_id: userId,
+          username: tgUser?.username || null,
+          first_name: tgUser?.first_name || null,
+          balance: INITIAL_BALANCE,
+          inventory_json: [],
+          display_name: tgUser?.first_name || '',
+          is_public: false,
+        };
 
-          const cloudKeys = buildStorageKeys(`tg_${cloudState.telegramId}`);
-          setStorageKeys(cloudKeys);
-          setBalance(cloudState.balance);
-          setInventory(cloudState.inventory);
-          setSyncMode('server');
-          setTelegramId(cloudState.telegramId);
-          writeLocalState(cloudKeys, cloudState.balance, cloudState.inventory);
-          setIsHydrating(false);
+        const { data: inserted, error: insertError } = await supabase
+          .from('players')
+          .insert(insertPayload)
+          .select('*')
+          .single();
+
+        if (insertError) {
+          console.error('Failed to create player profile', insertError);
+          setPlayerProfile({
+            id: userId,
+            name: tgUser?.first_name || '',
+            balance: INITIAL_BALANCE,
+            inventory: [],
+            telegram_id: isTg ? userId : undefined,
+            telegram_username: tgUser?.username,
+            is_public: false,
+          });
+          setBalance(INITIAL_BALANCE);
+          setInventory([]);
+          setInputName(tgUser?.first_name || '');
+          setInputIsPublic(false);
+          setShowWelcomeModal(true);
+          setIsLoaded(true);
           return;
-        } catch (error) {
-          console.error('Failed to load account from Supabase, local fallback will be used.', error);
         }
+
+        row = inserted as PlayerDbRow;
       }
 
-      if (isCancelled) {
-        return;
+      const profile = mapDbRowToProfile(row);
+      profile.telegram_id = isTg ? userId : undefined;
+      profile.telegram_username = row.username || tgUser?.username || undefined;
+      if (!profile.name && tgUser?.first_name) {
+        profile.name = tgUser.first_name;
       }
 
-      const localState = readLocalState(fallbackKeys);
-      setStorageKeys(fallbackKeys);
-      setBalance(localState.balance);
-      setInventory(localState.inventory);
-      setSyncMode('local');
-      setTelegramId(null);
-      setIsHydrating(false);
+      setPlayerProfile(profile);
+      setBalance(profile.balance);
+      setInventory(profile.inventory);
+      setInputName(profile.name || tgUser?.first_name || '');
+      setInputIsPublic(profile.is_public);
+      setShowWelcomeModal(!profile.name.trim());
+      setIsLoaded(true);
     };
 
-    bootstrapAccount();
-
-    return () => {
-      isCancelled = true;
-      if (saveTimeoutRef.current) {
-        window.clearTimeout(saveTimeoutRef.current);
-      }
-    };
+    initPlayer();
   }, []);
 
+  // --- SYNC TO DB ---
   useEffect(() => {
-    if (isHydrating) {
+    if (!isLoaded || !playerProfile) return;
+
+    const timer = setTimeout(async () => {
+      const { error } = await supabase
+        .from('players')
+        .update({
+          balance: balance,
+          inventory_json: inventory
+        })
+        .eq('telegram_id', playerProfile.id);
+      
+      if (error) console.error('Error syncing:', error);
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [balance, inventory, isLoaded, playerProfile]);
+
+
+  const handleRegister = async () => {
+    if (!playerProfile) return;
+    if (!inputName.trim()) {
+      alert("Введите имя!");
       return;
     }
 
-    writeLocalState(storageKeys, balance, inventory);
+    const newProfile = {
+      ...playerProfile,
+      name: inputName.trim(),
+      is_public: isTelegramUser ? inputIsPublic : false,
+    };
 
-    if (syncMode !== 'server' || !telegramId) {
+    const { error } = await supabase
+      .from('players')
+      .update({
+        display_name: inputName.trim(),
+        is_public: isTelegramUser ? inputIsPublic : false,
+      })
+      .eq('telegram_id', playerProfile.id);
+
+    if (error) {
+      alert("Ошибка регистрации: " + error.message);
       return;
     }
 
-    if (saveTimeoutRef.current) {
-      window.clearTimeout(saveTimeoutRef.current);
-    }
+    setPlayerProfile(newProfile);
+    setIsLoaded(true);
+    setShowWelcomeModal(false);
+  };
 
-    saveTimeoutRef.current = window.setTimeout(() => {
-      saveTelegramAccountState(telegramId, balance, inventory).catch((error) => {
-        console.error('Failed to save state to Supabase', error);
+  const handleUpdateSettings = async () => {
+     if (!playerProfile) return;
+     if (!inputName.trim()) {
+       alert("Введите имя!");
+       return;
+     }
+     
+     const updated = {
+       ...playerProfile,
+       name: inputName.trim(),
+       is_public: isTelegramUser ? inputIsPublic : false
+     };
+
+     const { error } = await supabase
+        .from('players')
+        .update({
+          display_name: inputName.trim(),
+          is_public: isTelegramUser ? inputIsPublic : false
+        })
+        .eq('telegram_id', playerProfile.id);
+      
+      if (error) {
+        alert("Ошибка сохранения: " + error.message);
+      } else {
+        setPlayerProfile(updated);
+        setShowSettingsModal(false);
+      }
+  };
+
+  const fetchLeaderboard = async () => {
+    setIsLoadingLeaderboard(true);
+    const { data, error } = await supabase
+      .from('players')
+      .select('*')
+      .order('balance', { ascending: false })
+      .limit(10);
+    
+    if (!error && data) {
+      const mapped = (data as PlayerDbRow[]).map((row) => {
+        const profile = mapDbRowToProfile(row);
+        profile.telegram_id = row.telegram_id;
+        profile.telegram_username = row.username || undefined;
+        return profile;
       });
-    }, 500);
-  }, [balance, inventory, isHydrating, storageKeys, syncMode, telegramId]);
+      setLeaderboard(mapped);
+    }
+    setIsLoadingLeaderboard(false);
+  };
 
   useEffect(() => {
     if (screen === AppScreen.PROFILE) setActiveTab('profile');
-    else if (screen === AppScreen.GAMES_MENU || screen === AppScreen.CASE_LIST || screen === AppScreen.ROCKET_MENU) setActiveTab('games');
+    else if (screen === AppScreen.LEADERBOARD) {
+      setActiveTab('leaderboard');
+      fetchLeaderboard();
+    }
+    else if (screen === AppScreen.GAMES_MENU || screen === AppScreen.CASE_LIST || screen === AppScreen.ROCKET_MENU || screen === AppScreen.UPGRADER_MENU || screen === AppScreen.SLOTS_MENU) setActiveTab('games');
   }, [screen]);
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
     if (tab === 'games') setScreen(AppScreen.GAMES_MENU);
     if (tab === 'profile') setScreen(AppScreen.PROFILE);
+    if (tab === 'leaderboard') setScreen(AppScreen.LEADERBOARD);
+  };
+
+  // --- SLOTS LOGIC ---
+  const handleSlotsStart = () => {
+    if (balance < slotsBet) {
+      alert("Недостаточно звезд!");
+      return;
+    }
+
+    setBalance(prev => prev - slotsBet);
+    
+    // 1. Select 4 random variants based on bet multipliers for THIS spin
+    const multipliers = [0.5, 1.5, 5.0, 20.0];
+    const variants = multipliers.map(m => getRandomItemNearPrice(slotsBet * m));
+    const variantData = variants.map(v => ({ item: v, payout: v.цена }));
+
+    // 2. Logic for 97% RTP with Equal Chance per Item
+    const sumPrices = variantData.reduce((acc, v) => acc + v.payout, 0);
+    const p = (0.97 * slotsBet) / sumPrices;
+    const totalWinProb = 4 * p;
+    
+    const r = Math.random();
+    let winnerIndex = -1;
+
+    // Determine Result
+    if (r < totalWinProb) {
+        const normalizedR = r / totalWinProb; // 0 to 1
+        winnerIndex = Math.floor(normalizedR * 4); 
+        if (winnerIndex > 3) winnerIndex = 3;
+    }
+
+    let resultIndices = [0, 0, 0];
+    let isWin = false;
+
+    if (winnerIndex !== -1) {
+        // WIN
+        resultIndices = [winnerIndex, winnerIndex, winnerIndex];
+        isWin = true;
+    } else {
+        // LOSE
+        const r1 = Math.floor(Math.random() * 4);
+        let r2 = Math.floor(Math.random() * 4);
+        while(r2 === r1) r2 = Math.floor(Math.random() * 4); 
+        const r3 = Math.floor(Math.random() * 4);
+        resultIndices = [r1, r2, r3];
+    }
+
+    // 3. Generate Strips for Animation
+    const STRIP_LENGTH = 25;
+    const TARGET_INDEX = 20;
+
+    const newStrips = [[], [], []] as {item: BaseItem, payout: number}[][];
+
+    for(let reel = 0; reel < 3; reel++) {
+        const strip = [];
+        for(let i = 0; i < STRIP_LENGTH; i++) {
+            if (i === TARGET_INDEX) {
+                strip.push(variantData[resultIndices[reel]]);
+            } else {
+                const randVar = variantData[Math.floor(Math.random() * 4)];
+                strip.push(randVar);
+            }
+        }
+        newStrips[reel] = strip;
+    }
+
+    setSlotsReelStrips(newStrips);
+    setSlotsWinItem(isWin ? variantData[winnerIndex].item : null);
+
+    setScreen(AppScreen.SLOTS_GAME);
+    setSlotsSpinState('PRE_SPIN'); 
+
+    setTimeout(() => {
+        setSlotsSpinState('SPINNING');
+    }, 50);
+
+    setTimeout(() => {
+        setSlotsSpinState('FINISHED');
+        if (isWin) {
+             const newItem: InventoryItem = {
+              ...variantData[winnerIndex].item,
+              uniqueId: generateUUID(),
+              serial: generateSerial(),
+              obtainedAt: Date.now()
+            };
+            setInventory(prev => [newItem, ...prev]);
+        }
+    }, 3500);
+  };
+
+  // --- UPGRADER LOGIC ---
+  const startUpgrader = () => {
+    if (!upgraderBetItem || !upgraderTargetItem) return;
+    
+    setUpgraderSpinState('SPINNING');
+
+    const chance = upgraderBetItem.цена / upgraderTargetItem.цена;
+    const winSectorDegrees = 360 * chance;
+    
+    const isWin = Math.random() < chance;
+    
+    let targetAngle = 0;
+    
+    if (isWin) {
+      const buffer = Math.min(5, winSectorDegrees / 4); 
+      const randomInSector = Math.random() * (winSectorDegrees - 2 * buffer) + buffer;
+      targetAngle = randomInSector;
+    } else {
+      const loseSectorSize = 360 - winSectorDegrees;
+      const buffer = Math.min(5, loseSectorSize / 4);
+      const randomInSector = Math.random() * (loseSectorSize - 2 * buffer) + buffer;
+      targetAngle = winSectorDegrees + randomInSector;
+    }
+
+    const fullSpins = 360 * (Math.floor(Math.random() * 4) + 3); 
+    const finalRotation = fullSpins + targetAngle;
+
+    setUpgraderRotation(finalRotation);
+  };
+
+  const handleUpgraderComplete = () => {
+    if (!upgraderBetItem || !upgraderTargetItem) return;
+    
+    const chance = upgraderBetItem.цена / upgraderTargetItem.цена;
+    const winSectorDegrees = 360 * chance;
+    const normalizedAngle = upgraderRotation % 360;
+    const isWin = normalizedAngle <= winSectorDegrees;
+
+    if (isWin) {
+      setUpgraderSpinState('WIN');
+      const wonItem: InventoryItem = {
+        ...upgraderTargetItem,
+        uniqueId: generateUUID(),
+        serial: generateSerial(),
+        obtainedAt: Date.now()
+      };
+      setInventory(prev => {
+        const filtered = prev.filter(i => i.uniqueId !== upgraderBetItem.uniqueId);
+        return [wonItem, ...filtered];
+      });
+    } else {
+      setUpgraderSpinState('LOSE');
+      setInventory(prev => prev.filter(i => i.uniqueId !== upgraderBetItem.uniqueId));
+    }
   };
 
   // --- ROCKET LOGIC ---
-
   const startRocketGame = () => {
     if (!rocketBetItem) return;
     
@@ -540,11 +789,8 @@ export default function App() {
     setRocketMultiplier(1.00);
     setRocketWinnings(null);
     
-    // 95% RTP Algorithm: crashPoint = 0.95 / (1 - random)
-    // If random is close to 0, point is 0.95 -> Instant crash (since min is 1.00)
     const r = Math.random();
-    const crash = 0.95 / (1 - r);
-    // Clamp: if < 1.00, it's an instant crash
+    const crash = 1.00 / (1 - r);
     setRocketCrashPoint(Math.max(1.00, crash));
     
     rocketStartTimeRef.current = Date.now();
@@ -553,17 +799,12 @@ export default function App() {
 
   const rocketTick = () => {
     const now = Date.now();
-    const elapsed = (now - rocketStartTimeRef.current) / 1000; // seconds
-    
-    // Growth formula: Grows slow then fast. e.g. 1.06^seconds seems common, or just e^(0.06*t)
-    // Let's use a simple exponential growth
+    const elapsed = (now - rocketStartTimeRef.current) / 1000;
     const currentMult = Math.pow(Math.E, 0.06 * elapsed);
-    
     setRocketMultiplier(currentMult);
 
     if (currentMult >= rocketCrashPoint) {
        setRocketState('CRASHED');
-       // Remove item from inventory
        setInventory(prev => prev.filter(i => i.uniqueId !== rocketBetItem?.uniqueId));
        setRocketBetItem(null);
     } else {
@@ -576,7 +817,6 @@ export default function App() {
     cancelAnimationFrame(rocketRequestRef.current!);
     setRocketState('CASHED_OUT');
     
-    // Calculate Winnings
     const winValue = rocketBetItem.цена * rocketMultiplier;
     const wonItemBase = findClosestItemByPrice(winValue);
     
@@ -589,7 +829,6 @@ export default function App() {
     
     setRocketWinnings(wonItemBase);
     
-    // Update Inventory: Remove bet item, Add won item
     setInventory(prev => {
       const filtered = prev.filter(i => i.uniqueId !== rocketBetItem.uniqueId);
       return [wonItem, ...filtered];
@@ -604,7 +843,6 @@ export default function App() {
   }, []);
 
   // --- CASE LOGIC ---
-
   const handleOpenCase = () => {
     if (!selectedCase) return;
     const totalCost = selectedCase.price * openAmount;
@@ -658,6 +896,147 @@ export default function App() {
 
   // --- RENDERERS ---
 
+  const renderWelcomeModal = () => (
+    <div className="fixed inset-0 z-[100] bg-slate-950 flex flex-col items-center justify-center p-6 animate-in fade-in">
+       <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl">
+          <h2 className="text-2xl font-bold text-white mb-4 text-center">Добро пожаловать!</h2>
+          <p className="text-slate-400 text-sm text-center mb-6">Создайте профиль, чтобы начать игру и сохранять прогресс.</p>
+          
+          <div className="space-y-4">
+             <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ваше имя</label>
+                <input 
+                  type="text" 
+                  value={inputName} 
+                  onChange={(e) => setInputName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-white outline-none focus:border-yellow-500"
+                  placeholder="Введите никнейм"
+                />
+             </div>
+             
+             {isTelegramUser && (
+               <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
+                  <input 
+                    type="checkbox"
+                    id="isPublic"
+                    checked={inputIsPublic}
+                    onChange={(e) => setInputIsPublic(e.target.checked)}
+                    className="mt-1 w-5 h-5 accent-yellow-500"
+                  />
+                  <label htmlFor="isPublic" className="text-sm text-slate-300">
+                    Показывать ссылку на мой Telegram в таблице лидеров
+                  </label>
+               </div>
+             )}
+
+             <Button onClick={handleRegister} className="w-full py-4 mt-2">
+               Начать игру
+             </Button>
+          </div>
+       </div>
+    </div>
+  );
+
+  const renderSettingsModal = () => (
+    <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 animate-in fade-in">
+       <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl relative">
+          <button onClick={() => setShowSettingsModal(false)} className="absolute top-4 right-4 text-slate-500 hover:text-white">
+             ✕
+          </button>
+
+          <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+             <Settings className="w-6 h-6" /> Настройки
+          </h2>
+          
+          <div className="space-y-4">
+             <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Ваше имя</label>
+                <input 
+                  type="text" 
+                  value={inputName} 
+                  onChange={(e) => setInputName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-white outline-none focus:border-yellow-500"
+                />
+             </div>
+             
+             {isTelegramUser && (
+               <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
+                  <input 
+                    type="checkbox"
+                    id="isPublicEdit"
+                    checked={inputIsPublic}
+                    onChange={(e) => setInputIsPublic(e.target.checked)}
+                    className="mt-1 w-5 h-5 accent-yellow-500"
+                  />
+                  <label htmlFor="isPublicEdit" className="text-sm text-slate-300">
+                    Показывать ссылку на Telegram в таблице лидеров
+                  </label>
+               </div>
+             )}
+
+             <Button onClick={handleUpdateSettings} className="w-full py-4 mt-2">
+               Сохранить
+             </Button>
+          </div>
+       </div>
+    </div>
+  );
+
+  const renderLeaderboard = () => (
+      <div className="flex flex-col h-full bg-slate-950 pb-20">
+          <div className="p-4 bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-10 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                 <Trophy className="w-6 h-6 text-yellow-500" /> Таблица Лидеров
+              </h2>
+          </div>
+
+          <div className="p-4 overflow-y-auto custom-scrollbar">
+             {isLoadingLeaderboard ? (
+               <div className="py-20 flex justify-center text-yellow-500"><Loader2 className="w-8 h-8 animate-spin"/></div>
+             ) : (
+               <div className="space-y-2">
+                  {leaderboard.map((p, index) => {
+                     const isMe = p.id === playerProfile?.id;
+                     const rank = index + 1;
+                     const isTop3 = rank <= 3;
+                     const rankColor = rank === 1 ? 'text-yellow-400' : rank === 2 ? 'text-slate-300' : rank === 3 ? 'text-orange-400' : 'text-slate-500';
+
+                     return (
+                       <div key={p.id} className={`flex items-center justify-between p-3 rounded-xl border ${isMe ? 'bg-yellow-500/10 border-yellow-500/50' : 'bg-slate-900 border-slate-800'}`}>
+                          <div className="flex items-center gap-4">
+                             <div className={`font-black text-xl w-8 text-center ${rankColor}`}>
+                                {isTop3 ? (rank === 1 ? '🥇' : rank === 2 ? '🥈' : '🥉') : rank}
+                             </div>
+                             <div>
+                                <div className="font-bold text-white flex items-center gap-2">
+                                   {p.is_public && p.telegram_username ? (
+                                      <a href={`https://t.me/${p.telegram_username}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 hover:text-blue-400 transition-colors">
+                                         {p.name} <ExternalLink className="w-3 h-3" />
+                                      </a>
+                                   ) : (
+                                      p.name || 'Unknown'
+                                   )}
+                                   {isMe && <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-1.5 rounded ml-1">ВЫ</span>}
+                                </div>
+                             </div>
+                          </div>
+                          <div className="text-right">
+                             <div className="text-yellow-400 font-bold text-sm flex items-center justify-end gap-1">
+                                {formatMoney(p.balance)} <Star className="w-3 h-3 fill-yellow-400" />
+                             </div>
+                          </div>
+                       </div>
+                     )
+                  })}
+                  {leaderboard.length === 0 && (
+                     <div className="text-center py-10 text-slate-500">Пока пусто...</div>
+                  )}
+               </div>
+             )}
+          </div>
+      </div>
+  );
+
   const renderGamesMenu = () => (
     <div className="p-4 flex flex-col gap-4 pb-24">
       <h2 className="text-2xl font-bold text-white mb-4 px-2">Игры</h2>
@@ -685,6 +1064,32 @@ export default function App() {
         <div className="text-left">
           <h3 className="text-xl font-bold text-white mb-1">Ракетка</h3>
           <p className="text-slate-400 text-sm">Ставь предметы и успей забрать до краша!</p>
+        </div>
+      </button>
+
+      <button 
+        onClick={() => setScreen(AppScreen.UPGRADER_MENU)}
+        className="bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-green-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
+      >
+        <div className="w-20 h-20 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
+          <Zap className="w-10 h-10 text-green-400" />
+        </div>
+        <div className="text-left">
+          <h3 className="text-xl font-bold text-white mb-1">Улучшения</h3>
+          <p className="text-slate-400 text-sm">Рискни предметом ради более дорогого!</p>
+        </div>
+      </button>
+
+      <button 
+        onClick={() => setScreen(AppScreen.SLOTS_MENU)}
+        className="bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-red-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
+      >
+        <div className="w-20 h-20 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
+          <Coins className="w-10 h-10 text-red-400" />
+        </div>
+        <div className="text-left">
+          <h3 className="text-xl font-bold text-white mb-1">Слоты</h3>
+          <p className="text-slate-400 text-sm">Собери 3 предмета и забери награду!</p>
         </div>
       </button>
     </div>
@@ -737,41 +1142,34 @@ export default function App() {
 
   const renderRocketGame = () => {
     if (!rocketBetItem && rocketState === 'IDLE') {
-        // Should not happen, but failsafe
         return <div className="p-10">Error: No bet item</div>;
     }
 
     return (
         <div className="flex flex-col h-screen bg-slate-950 relative overflow-hidden">
-            {/* Background Grid Animation */}
             <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px] animate-pan" />
             
-            {/* Top Info */}
             <div className="p-4 flex items-center justify-between relative z-10">
                 <button onClick={() => {
-                    if(rocketState === 'FLYING') return; // Prevent exit during fly
+                    if(rocketState === 'FLYING') return; 
                     setScreen(AppScreen.ROCKET_MENU);
                 }} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800 disabled:opacity-0" disabled={rocketState === 'FLYING'}>
                     <ArrowLeft className="w-6 h-6" />
                 </button>
-                <div className="bg-slate-900/80 px-4 py-1 rounded-full border border-slate-700 text-xs text-slate-400 flex items-center gap-2">
-                    <Info className="w-3 h-3" /> RTP 95%
-                </div>
             </div>
 
-            {/* Game Area */}
             <div className="flex-1 flex flex-col items-center justify-center relative z-10">
                  {rocketState === 'CRASHED' ? (
                      <div className="text-center animate-in zoom-in duration-300">
                          <div className="text-6xl mb-4">💥</div>
                          <h2 className="text-4xl font-black text-red-500 uppercase tracking-widest">CRASHED</h2>
-                         <div className="text-xl text-slate-400 mt-2 font-mono">@{rocketMultiplier.toFixed(2)}x</div>
+                         <div className="text-xl text-slate-400 mt-2 font-mono">{rocketMultiplier.toFixed(2)}x</div>
                      </div>
                  ) : rocketState === 'CASHED_OUT' ? (
                     <div className="text-center animate-in zoom-in duration-300">
                         <div className="text-6xl mb-4">🏆</div>
                         <h2 className="text-4xl font-black text-green-500 uppercase tracking-widest">WIN!</h2>
-                        <div className="text-xl text-slate-400 mt-2 font-mono">@{rocketMultiplier.toFixed(2)}x</div>
+                        <div className="text-xl text-slate-400 mt-2 font-mono">{rocketMultiplier.toFixed(2)}x</div>
                         {rocketWinnings && (
                             <div className="mt-6 bg-slate-900/80 p-4 rounded-xl border border-green-500/30 flex flex-col items-center gap-2">
                                 <span className="text-xs text-slate-400 uppercase">Выигран предмет</span>
@@ -792,13 +1190,12 @@ export default function App() {
                             {rocketMultiplier.toFixed(2)}x
                         </div>
                         {rocketState === 'FLYING' && (
-                            <div className="text-sm text-slate-400 mt-2 font-mono">Current Win: {rocketBetItem ? formatMoney(rocketBetItem.цена * rocketMultiplier) : 0}</div>
+                            <div className="text-sm text-slate-400 mt-2 font-mono">Win: {rocketBetItem ? formatMoney(rocketBetItem.цена * rocketMultiplier) : 0}</div>
                         )}
                      </div>
                  )}
             </div>
 
-            {/* Control Panel */}
             <div className="p-6 bg-slate-900 border-t border-slate-800 relative z-20 pb-10">
                 {rocketState === 'IDLE' && rocketBetItem && (
                     <div className="flex flex-col gap-4">
@@ -831,6 +1228,385 @@ export default function App() {
         </div>
     );
   };
+
+  const renderUpgraderMenu = () => (
+    <div className="flex flex-col h-full">
+      <div className="p-4 flex items-center gap-2 bg-slate-950 sticky top-0 z-10 border-b border-slate-800">
+         <button onClick={() => setScreen(AppScreen.GAMES_MENU)} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800">
+           <ArrowLeft className="w-5 h-5" />
+         </button>
+         <h2 className="text-xl font-bold text-white">Улучшения: Выбор предмета</h2>
+      </div>
+
+      <div className="p-4 pb-24 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
+          {inventory.length === 0 ? (
+              <div className="col-span-3 py-20 text-center text-slate-600 flex flex-col items-center">
+                  <Box className="w-16 h-16 mb-4 opacity-50" />
+                  <p>Инвентарь пуст</p>
+              </div>
+          ) : (
+              inventory.map(item => {
+                  const rarityCol = getRarityColor(item.редкость);
+                  return (
+                      <button 
+                          key={item.uniqueId}
+                          onClick={() => {
+                            setUpgraderBetItem(item);
+                            setScreen(AppScreen.UPGRADER_SELECT_TARGET);
+                          }}
+                          className={`relative aspect-[4/5] rounded-xl border-2 flex flex-col items-center justify-between p-2 transition-all hover:scale-[1.02] ${rarityCol} bg-opacity-40`}
+                      >
+                          <div className="text-4xl mt-2 drop-shadow-lg">{item.emg}</div>
+                          <div className="w-full text-center">
+                              <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{item.название}</div>
+                              <div className="mt-1 text-xs font-bold text-yellow-400 flex items-center justify-center gap-0.5 bg-black/30 rounded py-0.5">
+                                  <Star className="w-2.5 h-2.5 fill-yellow-400" /> {formatMoney(item.цена)}
+                              </div>
+                          </div>
+                      </button>
+                  );
+              })
+          )}
+      </div>
+    </div>
+  );
+
+  const renderUpgraderSelectTarget = () => {
+    if (!upgraderBetItem) return null;
+
+    const targets = ITEMS_DATA["items_db"]
+        .filter(i => i.цена > upgraderBetItem.цена)
+        .sort((a, b) => a.цена - b.цена)
+        .slice(0, 10);
+
+    return (
+        <div className="flex flex-col h-full bg-slate-950">
+            <div className="p-4 flex items-center gap-2 bg-slate-900 border-b border-slate-800">
+                <button onClick={() => setScreen(AppScreen.UPGRADER_MENU)} className="p-2 bg-slate-800 rounded-full hover:bg-slate-700">
+                    <ArrowLeft className="w-5 h-5" />
+                </button>
+                <h2 className="text-xl font-bold text-white">Выберите цель</h2>
+            </div>
+
+            <div className="p-4 bg-slate-900 border-b border-slate-800 flex items-center gap-3">
+                <div className="w-12 h-12 flex items-center justify-center text-3xl bg-slate-800 rounded-lg">
+                    {upgraderBetItem.emg}
+                </div>
+                <div>
+                    <div className="text-xs text-slate-500 uppercase font-bold">Ваша ставка</div>
+                    <div className="font-bold text-sm">{upgraderBetItem.название}</div>
+                    <div className="text-xs text-yellow-400 font-bold">{formatMoney(upgraderBetItem.цена)} <Star className="inline w-3 h-3"/></div>
+                </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                {targets.length === 0 ? (
+                    <div className="text-center py-10 text-slate-500">Нет доступных улучшений (этот предмет слишком дорогой)</div>
+                ) : (
+                    targets.map(target => {
+                        const chance = (upgraderBetItem.цена / target.цена) * 100;
+                        const rarityCol = getRarityColor(target.редкость);
+                        
+                        return (
+                            <button
+                                key={target.id}
+                                onClick={() => {
+                                    setUpgraderTargetItem(target);
+                                    setUpgraderRotation(0);
+                                    setUpgraderSpinState('IDLE');
+                                    setScreen(AppScreen.UPGRADER_GAME);
+                                }}
+                                className={`w-full bg-slate-900 border-l-4 rounded-r-xl p-3 flex items-center justify-between hover:bg-slate-800 transition-all active:scale-[0.98] ${rarityCol.replace('border', 'border-l')}`}
+                            >
+                                <div className="flex items-center gap-3">
+                                    <div className="text-3xl">{target.emg}</div>
+                                    <div className="text-left">
+                                        <div className="font-bold text-sm text-white">{target.название}</div>
+                                        <div className="text-xs text-yellow-400 font-bold flex items-center gap-1">
+                                            {formatMoney(target.цена)} <Star className="w-3 h-3 fill-yellow-400"/>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-xs text-slate-500 uppercase font-bold">Шанс</div>
+                                    <div className={`font-black text-lg ${chance < 10 ? 'text-red-400' : chance < 30 ? 'text-yellow-400' : 'text-green-400'}`}>
+                                        {chance.toFixed(2)}%
+                                    </div>
+                                </div>
+                            </button>
+                        );
+                    })
+                )}
+            </div>
+        </div>
+    );
+  };
+
+  const renderUpgraderGame = () => {
+      if (!upgraderBetItem || !upgraderTargetItem) return null;
+
+      const chance = upgraderBetItem.цена / upgraderTargetItem.цена;
+      const percent = (chance * 100).toFixed(2);
+      
+      const r = 100;
+      const c = 2 * Math.PI * r;
+      const filledLength = c * chance;
+      const gapLength = c * (1 - chance);
+
+      return (
+          <div className="flex flex-col h-screen bg-slate-950">
+              <div className="p-4 flex items-center justify-between z-10">
+                  <button onClick={() => {
+                      if(upgraderSpinState === 'SPINNING') return;
+                      setScreen(AppScreen.UPGRADER_SELECT_TARGET);
+                  }} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800 disabled:opacity-0" disabled={upgraderSpinState === 'SPINNING'}>
+                      <ArrowLeft className="w-6 h-6" />
+                  </button>
+              </div>
+
+              <div className="flex-1 flex flex-col items-center justify-center gap-8 relative">
+                   {/* Main Wheel Container */}
+                   <div className="relative w-64 h-64 flex items-center justify-center">
+                        <svg className="w-full h-full -rotate-90 transform" viewBox="0 0 240 240">
+                            <circle cx="120" cy="120" r={r} fill="none" stroke="#1e293b" strokeWidth="20" />
+                            <circle 
+                                cx="120" 
+                                cy="120" 
+                                r={r} 
+                                fill="none" 
+                                stroke="#10b981" 
+                                strokeWidth="20" 
+                                strokeDasharray={`${filledLength} ${gapLength}`}
+                                strokeLinecap="butt"
+                            />
+                        </svg>
+
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                             {upgraderSpinState === 'WIN' ? (
+                                 <div className="animate-in zoom-in text-green-500 font-black text-4xl">WIN</div>
+                             ) : upgraderSpinState === 'LOSE' ? (
+                                 <div className="animate-in zoom-in text-red-500 font-black text-4xl">LOSE</div>
+                             ) : (
+                                 <div className="text-white font-black text-3xl">{percent}%</div>
+                             )}
+                        </div>
+
+                        <div 
+                            className="absolute inset-0 w-full h-full"
+                            style={{
+                                transform: `rotate(${upgraderRotation}deg)`,
+                                transition: upgraderSpinState === 'SPINNING' ? 'transform 3.5s cubic-bezier(0.15, 0.85, 0.35, 1)' : 'none'
+                            }}
+                            onTransitionEnd={handleUpgraderComplete}
+                        >
+                            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1">
+                                <div className="w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[20px] border-t-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.8)]" />
+                            </div>
+                        </div>
+                   </div>
+
+                   {/* Items Info */}
+                   <div className="flex items-center gap-4 px-6 w-full max-w-sm">
+                        <div className={`flex-1 bg-slate-900 border rounded-xl p-3 flex flex-col items-center relative ${upgraderSpinState === 'WIN' ? 'opacity-30 grayscale' : 'border-slate-700'}`}>
+                             <div className="text-3xl mb-1">{upgraderBetItem.emg}</div>
+                             <div className="text-xs font-bold text-center leading-tight">{upgraderBetItem.название}</div>
+                             <div className="text-xs text-yellow-500 mt-1">{formatMoney(upgraderBetItem.цена)}</div>
+                             {upgraderSpinState === 'LOSE' && <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-xl text-red-500 font-bold text-xl rotate-12 uppercase border-2 border-red-500">Потеряно</div>}
+                        </div>
+                        
+                        <div className="text-slate-500"><ArrowRightIcon /></div>
+
+                        <div className={`flex-1 bg-slate-900 border rounded-xl p-3 flex flex-col items-center relative ${upgraderSpinState === 'LOSE' ? 'opacity-30 grayscale' : 'border-green-500/50 bg-green-900/10'}`}>
+                             <div className="text-3xl mb-1">{upgraderTargetItem.emg}</div>
+                             <div className="text-xs font-bold text-center leading-tight">{upgraderTargetItem.название}</div>
+                             <div className="text-xs text-yellow-500 mt-1">{formatMoney(upgraderTargetItem.цена)}</div>
+                             {upgraderSpinState === 'WIN' && <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-xl text-green-400 font-bold text-xl -rotate-12 uppercase border-2 border-green-500">Получено</div>}
+                        </div>
+                   </div>
+              </div>
+
+              <div className="p-6 bg-slate-900 border-t border-slate-800 pb-10">
+                   {upgraderSpinState === 'IDLE' && (
+                       <Button onClick={startUpgrader} className="w-full py-4 text-xl" variant="success">
+                           УЛУЧШИТЬ ({percent}%)
+                       </Button>
+                   )}
+                   {(upgraderSpinState === 'WIN' || upgraderSpinState === 'LOSE') && (
+                       <Button onClick={() => setScreen(AppScreen.UPGRADER_MENU)} variant="secondary" className="w-full">
+                           {upgraderSpinState === 'WIN' ? 'Отлично' : 'В меню'}
+                       </Button>
+                   )}
+                   {upgraderSpinState === 'SPINNING' && (
+                       <Button disabled className="w-full py-4 text-xl opacity-50">
+                           Крутим...
+                       </Button>
+                   )}
+              </div>
+          </div>
+      );
+  };
+
+  const renderSlotsMenu = () => (
+      <div className="flex flex-col h-full bg-slate-950">
+          <div className="p-4 flex items-center gap-2 bg-slate-950 sticky top-0 z-10 border-b border-slate-800">
+             <button onClick={() => setScreen(AppScreen.GAMES_MENU)} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800">
+               <ArrowLeft className="w-5 h-5" />
+             </button>
+             <h2 className="text-xl font-bold text-white">Слоты</h2>
+          </div>
+
+          <div className="flex-1 flex flex-col items-center justify-center p-4 pb-20">
+              <div className="text-center mb-8">
+                  <Coins className="w-16 h-16 text-red-500 mx-auto mb-2" />
+                  <h2 className="text-3xl font-black text-white uppercase">Слоты</h2>
+              </div>
+
+              <div className="w-full max-w-sm bg-slate-900 p-6 rounded-2xl border border-slate-700">
+                  <label className="text-sm font-bold text-slate-400 uppercase mb-2 block">Ваша ставка</label>
+                  <div className="flex items-center gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800 mb-4 focus-within:border-yellow-500">
+                      <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
+                      <input 
+                          type="number" 
+                          value={slotsBet}
+                          onChange={(e) => setSlotsBet(Math.max(1, parseInt(e.target.value) || 0))}
+                          className="bg-transparent text-white font-mono text-xl outline-none w-full"
+                      />
+                  </div>
+
+                  <div className="flex gap-2 mb-6">
+                      {[100, 1000, 10000, 100000].map(amt => (
+                          <button 
+                            key={amt}
+                            onClick={() => setSlotsBet(amt)}
+                            className="flex-1 py-2 bg-slate-800 rounded-lg text-xs font-bold text-slate-300 hover:bg-slate-700"
+                          >
+                              {amt >= 1000 ? `${amt/1000}k` : amt}
+                          </button>
+                      ))}
+                  </div>
+
+                  <Button onClick={() => {
+                      handleSlotsStart();
+                  }} className="w-full py-4 text-xl">
+                      ИГРАТЬ
+                  </Button>
+              </div>
+          </div>
+      </div>
+  );
+
+  const renderSlotsGame = () => {
+    // Constants for reel animation
+    const ITEM_HEIGHT = 160; 
+    const REEL_TARGET_INDEX = 20;
+
+    return (
+        <div className="flex flex-col h-screen bg-slate-950">
+             <div className="p-4 flex items-center justify-between z-10">
+                <button onClick={() => {
+                    if(slotsSpinState === 'SPINNING') return;
+                    setScreen(AppScreen.SLOTS_MENU);
+                }} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800 disabled:opacity-0" disabled={slotsSpinState === 'SPINNING'}>
+                    <ArrowLeft className="w-6 h-6" />
+                </button>
+                <div className="font-mono text-yellow-400 font-bold flex items-center gap-2 bg-slate-900 px-3 py-1 rounded-lg">
+                    Ставка: {formatMoney(slotsBet)} <Star className="w-4 h-4 fill-yellow-400" />
+                </div>
+            </div>
+
+            <div className="flex-1 flex flex-col items-center justify-center p-4">
+                
+                {/* REELS CONTAINER */}
+                <div className="flex gap-2 md:gap-4 p-4 bg-gradient-to-b from-slate-900 to-slate-950 rounded-2xl border-4 border-slate-700 shadow-2xl relative">
+                    <div className="absolute top-1/2 left-0 right-0 h-1 bg-red-500/20 z-0 -translate-y-1/2" />
+                    
+                    {[0, 1, 2].map((reelIndex) => {
+                        const strip = slotsReelStrips[reelIndex];
+                        const duration = 2000 + (reelIndex * 500); // 2s, 2.5s, 3s
+
+                        const translateY = slotsSpinState === 'PRE_SPIN' ? 0 : -(REEL_TARGET_INDEX * ITEM_HEIGHT) + (ITEM_HEIGHT * 0.2); 
+                        // Offset by a bit to center the item (container height approx 1.5 * ITEM_HEIGHT)
+
+                        return (
+                          <div key={reelIndex} className="w-28 h-48 bg-slate-950 rounded-lg border border-slate-800 overflow-hidden relative shadow-inner">
+                              <div 
+                                  className="w-full flex flex-col items-center"
+                                  style={{
+                                      transform: `translateY(${translateY}px)`,
+                                      transition: slotsSpinState === 'SPINNING' || slotsSpinState === 'FINISHED' 
+                                          ? `transform ${duration}ms cubic-bezier(0.1, 0.7, 0.1, 1)` 
+                                          : 'none'
+                                  }}
+                              >
+                                  {/* RENDER STRIP */}
+                                  {strip.map((itemData, i) => (
+                                      <div 
+                                        key={i} 
+                                        className="flex flex-col items-center justify-center shrink-0"
+                                        style={{ height: `${ITEM_HEIGHT}px` }}
+                                      >
+                                          <div className="text-5xl mb-2 drop-shadow-lg">{itemData.item.emg}</div>
+                                          <div className="text-[10px] font-bold text-slate-300 text-center leading-none px-1 line-clamp-2 max-w-full">
+                                              {itemData.item.название}
+                                          </div>
+                                          <div className="text-[10px] text-yellow-500 font-mono mt-1">
+                                              {formatMoney(itemData.item.цена)}
+                                          </div>
+                                      </div>
+                                  ))}
+                              </div>
+                          </div>
+                        );
+                    })}
+                </div>
+
+                {/* INFO / WIN */}
+                <div className="mt-8 text-center h-32 flex flex-col items-center justify-center">
+                    {slotsSpinState === 'FINISHED' ? (
+                        slotsWinItem ? (
+                            <div className="animate-in zoom-in duration-300 fill-mode-forwards">
+                                <h2 className="text-3xl font-black text-green-500 uppercase">ПОБЕДА!</h2>
+                                <div className="text-white mt-1">Получен предмет:</div>
+                                <div className="text-xl font-bold flex flex-col items-center justify-center text-yellow-400 mt-2 bg-slate-900 px-4 py-2 rounded-xl border border-yellow-500/50">
+                                     <div className="flex items-center gap-2">
+                                        {slotsWinItem.emg} {slotsWinItem.название}
+                                     </div>
+                                     <div className="text-sm text-slate-400 mt-1">
+                                        Цена: {formatMoney(slotsWinItem.цена)}
+                                     </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="animate-in fade-in zoom-in duration-300">
+                                <h2 className="text-3xl font-black text-slate-600 uppercase">НИЧЕГО</h2>
+                                <div className="text-slate-500 mt-1">Попробуйте еще раз</div>
+                            </div>
+                        )
+                    ) : (
+                        <div className="text-slate-500 text-sm max-w-xs animate-pulse">
+                             Крутим...
+                        </div>
+                    )}
+                </div>
+
+            </div>
+
+            <div className="p-6 bg-slate-900 border-t border-slate-800 pb-10">
+                <Button 
+                    onClick={() => {
+                        if (slotsSpinState === 'FINISHED') {
+                            setScreen(AppScreen.SLOTS_MENU);
+                        }
+                    }} 
+                    disabled={slotsSpinState !== 'FINISHED'} 
+                    className={`w-full py-4 text-xl ${slotsSpinState === 'FINISHED' && slotsWinItem ? 'bg-green-600 hover:bg-green-500' : ''} ${slotsSpinState !== 'FINISHED' ? 'opacity-0 pointer-events-none' : ''}`}
+                >
+                    {slotsSpinState === 'FINISHED' ? 'ИГРАТЬ СНОВА' : '...'}
+                </Button>
+            </div>
+        </div>
+    );
+  }
 
   const renderCaseList = () => {
     return (
@@ -943,7 +1719,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Buy Panel - Fixed at bottom, Z-index 40 to be above content, but BottomNav is hidden on this screen */}
         <div className="fixed bottom-0 left-0 w-full bg-slate-900/95 backdrop-blur-md p-4 border-t border-slate-800 shadow-[0_-10px_40px_rgba(0,0,0,0.5)] z-40 max-w-md mx-auto right-0">
           <QuantitySelector value={openAmount} onChange={setOpenAmount} />
           <Button onClick={handleOpenCase} className="w-full py-4 text-lg" disabled={balance < selectedCase.price * openAmount}>
@@ -1012,7 +1787,6 @@ export default function App() {
 
     return (
       <div className="flex flex-col h-full bg-slate-950 relative">
-        {/* Sell All Confirmation Modal */}
         {showSellAllConfirm && (
           <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
              <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
@@ -1036,24 +1810,32 @@ export default function App() {
         <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 backdrop-blur-sm sticky top-0 z-20">
           <div className="flex items-center gap-2">
             <User className="w-6 h-6 text-slate-300" />
-            <h2 className="font-bold text-lg text-white">Профиль</h2>
+            <div>
+              <h2 className="font-bold text-lg text-white">{playerProfile?.name || 'Профиль'}</h2>
+              <div className="text-[10px] text-slate-500 uppercase">{playerProfile?.id ? 'ID: ' + playerProfile.id.slice(0, 8) : ''}</div>
+            </div>
           </div>
-          {inventory.length > 0 && (
-             <button 
-                onClick={() => setShowSellAllConfirm(true)}
-                className="text-xs font-bold text-red-400 hover:text-red-300 bg-red-900/20 px-3 py-1.5 rounded-lg border border-red-900/50 flex items-center gap-2 transition-all active:scale-95"
+          
+          <div className="flex items-center gap-2">
+             <button
+               onClick={() => {
+                 setInputName(playerProfile?.name || '');
+                 setInputIsPublic(playerProfile?.is_public || false);
+                 setShowSettingsModal(true);
+               }}
+               className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 text-slate-300"
              >
-                <Trash2 className="w-3 h-3" /> ПРОДАТЬ ВСЕ
+               <Settings className="w-5 h-5" />
              </button>
-          )}
-        </div>
 
-        <div className="px-4 py-2 border-b border-slate-800 bg-slate-950">
-          <div className="text-xs text-slate-400">
-            {telegramId ? `Telegram ID: ${telegramId}` : 'Telegram ID: not detected (local mode)'}
-          </div>
-          <div className={`text-xs font-semibold ${syncMode === 'server' ? 'text-emerald-400' : 'text-amber-400'}`}>
-            {syncMode === 'server' ? 'Sync: Supabase Cloud DB' : 'Sync: localStorage'}
+             {inventory.length > 0 && (
+                <button 
+                    onClick={() => setShowSellAllConfirm(true)}
+                    className="text-xs font-bold text-red-400 hover:text-red-300 bg-red-900/20 px-3 py-1.5 rounded-lg border border-red-900/50 flex items-center gap-2 transition-all active:scale-95 h-9"
+                >
+                    <Trash2 className="w-3 h-3" /> ПРОДАТЬ ВСЕ
+                </button>
+             )}
           </div>
         </div>
 
@@ -1109,7 +1891,6 @@ export default function App() {
             )}
         </div>
 
-        {/* Bottom Selection Bar */}
         <div className={`fixed bottom-20 left-0 w-full bg-slate-900 border-t border-slate-800 p-4 transition-transform duration-300 max-w-md mx-auto right-0 z-30 ${selectedCount > 0 ? 'translate-y-0' : 'translate-y-[150%]'}`}>
            <div className="flex items-center justify-between mb-3">
               <div className="text-slate-400 text-sm">Выбрано: <span className="text-white font-bold">{selectedCount}</span></div>
@@ -1123,20 +1904,25 @@ export default function App() {
     );
   };
 
-  if (isHydrating) {
+  const ArrowRightIcon = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+  );
+
+  if (!isLoaded && !showWelcomeModal) {
     return (
-      <div className="min-h-screen bg-slate-950 text-white max-w-md mx-auto flex items-center justify-center">
-        <div className="text-center px-6">
-          <div className="text-lg font-bold mb-2">Загрузка аккаунта</div>
-          <div className="text-sm text-slate-400">Подключаем Telegram-профиль и облачную базу...</div>
-        </div>
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white">
+          <Loader2 className="w-10 h-10 animate-spin text-yellow-500 mb-4" />
+          <p className="text-slate-400">Загрузка профиля...</p>
       </div>
-    );
+    )
   }
 
   return (
     <div className="min-h-screen bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-hidden">
       
+      {showWelcomeModal && renderWelcomeModal()}
+      {showSettingsModal && renderSettingsModal()}
+
       {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && (
         <Header balance={balance} />
       )}
@@ -1155,12 +1941,20 @@ export default function App() {
       
       {screen === AppScreen.DROP_SUMMARY && renderDropSummary()}
       {screen === AppScreen.PROFILE && renderProfile()}
+      {screen === AppScreen.LEADERBOARD && renderLeaderboard()}
       
       {screen === AppScreen.ROCKET_MENU && renderRocketMenu()}
       {screen === AppScreen.ROCKET_GAME && renderRocketGame()}
 
-      {/* Bottom Nav: Hidden on Roulette, Summary, Rocket Game, AND CaseDetail */}
-      {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && screen !== AppScreen.CASE_DETAIL && screen !== AppScreen.ROCKET_GAME && (
+      {screen === AppScreen.UPGRADER_MENU && renderUpgraderMenu()}
+      {screen === AppScreen.UPGRADER_SELECT_TARGET && renderUpgraderSelectTarget()}
+      {screen === AppScreen.UPGRADER_GAME && renderUpgraderGame()}
+
+      {screen === AppScreen.SLOTS_MENU && renderSlotsMenu()}
+      {screen === AppScreen.SLOTS_GAME && renderSlotsGame()}
+
+      {/* Bottom Nav */}
+      {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && screen !== AppScreen.CASE_DETAIL && screen !== AppScreen.ROCKET_GAME && screen !== AppScreen.UPGRADER_GAME && screen !== AppScreen.UPGRADER_SELECT_TARGET && screen !== AppScreen.SLOTS_GAME && (
         <BottomNav activeTab={activeTab} onTabChange={handleTabChange} />
       )}
 

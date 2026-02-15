@@ -1,81 +1,67 @@
-# lowk-cazik (GitHub Pages + Supabase Free)
+# lowk-cazik (GitHub Pages + Supabase)
 
-This version is made for:
-- Frontend: GitHub Pages
-- Database: Supabase (free cloud PostgreSQL)
+Current version includes:
+- case opening
+- rocket
+- upgrader
+- slots
+- leaderboard
+- Telegram-based account binding (same Telegram account -> same player profile)
 
-## Why this setup
+## 1. Create Supabase table/migration
 
-GitHub Pages cannot run backend code (Node/SQLite). It can host only static files.
-So game progress must be stored in a cloud DB. Here we use Supabase Free.
-
-## Step-by-step setup (for beginners)
-
-### 1. Create free Supabase project
-
-1. Open: https://supabase.com/
-2. Sign up / log in.
-3. Click `New project`.
-4. Fill project name and DB password.
-5. Wait until project status becomes ready.
-
-### 2. Create table in Supabase
-
-1. In Supabase dashboard open `SQL Editor`.
+1. Open Supabase -> `SQL Editor`.
 2. Create `New query`.
-3. Open file `supabase/schema.sql` in this repo.
-4. Copy all SQL and run it.
+3. Paste `supabase/schema.sql` from this repo.
+4. Run.
 
-This creates table `public.players` where progress is stored by `telegram_id`.
+This script is idempotent and can be re-run safely.
 
-### 3. Copy Supabase keys
+## 2. Get Supabase keys
 
-In Supabase dashboard open `Project Settings` -> `API` and copy:
+Supabase -> `Project Settings` -> `API`:
 - `Project URL`
-- `anon public` key
+- `Publishable key (anon)`
 
-### 4. Put keys into local env
+Do not use `secret`/`service_role` in frontend.
 
-In project folder run:
+## 3. Create local env file
 
-```bash
+In project root:
+
+```powershell
 copy .env.example .env.local
 ```
 
-Then open `.env.local` and set:
+Then fill `.env.local`:
 
 ```env
-VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_ANON_PUBLIC_KEY
-VITE_DEFAULT_BALANCE=1000
+VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_PUBLISHABLE_KEY
+VITE_DEFAULT_BALANCE=0
 ```
 
-### 5. Run locally
+## 4. Run
 
-```bash
+```powershell
 npm install
 npm run dev
 ```
 
-### 6. Deploy to GitHub Pages
+## 5. GitHub Pages deploy
 
-Important: GitHub Pages build also needs these env vars.
-If you deploy with GitHub Actions, add repository secrets:
+If you deploy via GitHub Actions, add repository secrets:
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
 - `VITE_DEFAULT_BALANCE` (optional)
 
-Then build/publish frontend as usual.
+## 6. Telegram bot setup
 
-### 7. Telegram BotFather WebApp URL
+In `@BotFather` set WebApp Menu URL to your GitHub Pages URL.
 
-In `@BotFather` set menu button URL to your GitHub Pages frontend URL.
-Example:
+## Verification checklist
 
-`https://your-username.github.io/lowk-cazik/`
-
-## Notes
-
-- If Supabase keys are not set, app falls back to localStorage mode.
-- In localStorage mode progress is only on one device/browser.
-- In Supabase mode progress is cloud-synced by Telegram user id.
+1. Open app from Telegram bot menu button.
+2. Profile shows your player and data persists after reopen.
+3. `players` table has one stable row for your Telegram id.
+4. Balance/inventory change in-game and update in Supabase.

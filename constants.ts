@@ -1,8 +1,9 @@
 
+
 import { BaseItem, Case } from './types';
 
 // Start balance
-export const INITIAL_BALANCE = 100000000000;
+export const INITIAL_BALANCE = 0;
 
 export const ITEMS_DATA: { [key: string]: BaseItem[] } = {
   "items_db": [
@@ -234,7 +235,7 @@ export const CASES_DATA: Case[] = [
     "key": "trash_case",
     "name": "Кейс с мусором",
     "type": "ценовой",
-    "price": 20,
+    "price": 0,
     "categoryEmoji": "🗑️",
     "items": [
       { "id": 1, "chance_percent": 29.731992 },
@@ -325,7 +326,7 @@ export const CASES_DATA: Case[] = [
     "key": "student_case",
     "name": "Кейс студента",
     "type": "ценовой",
-    "price": 7550,
+    "price": 7500,
     "categoryEmoji": "🎒",
     "items": [
       { "id": 40, "chance_percent": 10.703602 },
@@ -355,7 +356,7 @@ export const CASES_DATA: Case[] = [
     "key": "worker_case",
     "name": "Кейс работяги",
     "type": "ценовой",
-    "price": 44300,
+    "price": 43000,
     "categoryEmoji": "👷",
     "items": [
       { "id": 61, "chance_percent": 9.072027 },
@@ -384,7 +385,7 @@ export const CASES_DATA: Case[] = [
     "key": "middle_class_case",
     "name": "Кейс среднего класса",
     "type": "ценовой",
-    "price": 123000,
+    "price": 125000,
     "categoryEmoji": "👔",
     "items": [
       { "id": 81, "chance_percent": 7.392781 },
@@ -413,7 +414,7 @@ export const CASES_DATA: Case[] = [
     "key": "pro_case",
     "name": "Кейс специалиста",
     "type": "ценовой",
-    "price": 282000,
+    "price": 280000,
     "categoryEmoji": "💼",
     "items": [
       { "id": 101, "chance_percent": 11.119698 },
@@ -442,7 +443,7 @@ export const CASES_DATA: Case[] = [
     "key": "rich_case",
     "name": "Кейс богача",
     "type": "ценовой",
-    "price": 651000,
+    "price": 625000,
     "categoryEmoji": "🏦",
     "items": [
       { "id": 121, "chance_percent": 4.968256 },
@@ -481,7 +482,7 @@ export const CASES_DATA: Case[] = [
     "key": "millionaire_case",
     "name": "Кейс миллионера",
     "type": "ценовой",
-    "price": 1670000,
+    "price": 1600000,
     "categoryEmoji": "💰",
     "items": [
       { "id": 151, "chance_percent": 8.18783 },
@@ -510,7 +511,7 @@ export const CASES_DATA: Case[] = [
     "key": "multi_millionaire_case",
     "name": "Кейс мультимиллионера",
     "type": "ценовой",
-    "price": 13450000,
+    "price": 12500000,
     "categoryEmoji": "🤑",
     "items": [
       { "id": 171, "chance_percent": 19.845495 },
@@ -538,46 +539,48 @@ export const CASES_DATA: Case[] = [
     "key": "billionaire_case",
     "name": "Кейс миллиардера",
     "type": "ценовой",
-    "price": 14000000,
+    "price": 100000000,
     "categoryEmoji": "🤵",
     "items": [
-      { "id": 190, "chance_percent": 1.133748 },
-      { "id": 191, "chance_percent": 1.081015 },
-      { "id": 192, "chance_percent": 1.03297 },
-      { "id": 193, "chance_percent": 0.989014 },
-      { "id": 194, "chance_percent": 0.948646 },
-      { "id": 195, "chance_percent": 0.911444 },
-      { "id": 196, "chance_percent": 0.87705 },
-      { "id": 197, "chance_percent": 0.845158 },
-      { "id": 198, "chance_percent": 0.815503 },
-      { "id": 200, "chance_percent": 88.709282 },
-      { "id": 201, "chance_percent": 0.258243 },
-      { "id": 202, "chance_percent": 0.238378 },
-      { "id": 203, "chance_percent": 0.215202 },
-      { "id": 204, "chance_percent": 0.193682 },
-      { "id": 205, "chance_percent": 0.172162 },
-      { "id": 206, "chance_percent": 0.147567 },
-      { "id": 207, "chance_percent": 0.129121 },
-      { "id": 208, "chance_percent": 0.110675 },
-      { "id": 209, "chance_percent": 0.099262 },
-      { "id": 210, "chance_percent": 0.099262 },
-      { "id": 211, "chance_percent": 0.099262 },
-      { "id": 212, "chance_percent": 0.099262 },
-      { "id": 213, "chance_percent": 0.099262 },
-      { "id": 214, "chance_percent": 0.099262 },
-      { "id": 215, "chance_percent": 0.099262 },
-      { "id": 216, "chance_percent": 0.099262 },
-      { "id": 217, "chance_percent": 0.099262 },
-      { "id": 218, "chance_percent": 0.099262 },
-      { "id": 219, "chance_percent": 0.099262 },
-      { "id": 220, "chance_percent": 0.099262 }
+        { "id": 189, "chance_percent": 7.47 },
+        { "id": 190, "chance_percent": 7.11 },
+        { "id": 191, "chance_percent": 6.78 },
+        { "id": 192, "chance_percent": 6.48 },
+        { "id": 193, "chance_percent": 6.20 },
+        { "id": 194, "chance_percent": 5.95 },
+        { "id": 195, "chance_percent": 5.71 },
+        { "id": 196, "chance_percent": 5.50 },
+        { "id": 197, "chance_percent": 5.30 },
+        { "id": 198, "chance_percent": 5.11 },
+        { "id": 199, "chance_percent": 4.54 },
+        { "id": 200, "chance_percent": 4.33 },
+        { "id": 201, "chance_percent": 3.73 },
+        { "id": 202, "chance_percent": 3.44 },
+        { "id": 203, "chance_percent": 3.11 },
+        { "id": 204, "chance_percent": 2.80 },
+        { "id": 205, "chance_percent": 2.49 },
+        { "id": 206, "chance_percent": 2.13 },
+        { "id": 207, "chance_percent": 1.86 },
+        { "id": 208, "chance_percent": 1.60 },
+        { "id": 209, "chance_percent": 1.36 },
+        { "id": 210, "chance_percent": 1.18 },
+        { "id": 211, "chance_percent": 1.02 },
+        { "id": 212, "chance_percent": 0.86 },
+        { "id": 213, "chance_percent": 0.74 },
+        { "id": 214, "chance_percent": 0.62 },
+        { "id": 215, "chance_percent": 0.53 },
+        { "id": 216, "chance_percent": 0.43 },
+        { "id": 217, "chance_percent": 0.33 },
+        { "id": 218, "chance_percent": 0.27 },
+        { "id": 219, "chance_percent": 0.25 },
+        { "id": 220, "chance_percent": 0.22 }
     ]
   },
   {
     "key": "epic_case",
     "name": "Эпический кейс",
     "type": "редкость",
-    "price": 5590000,
+    "price": 5000000,
     "categoryEmoji": "🦄",
     "items": [
       { "id": 171, "chance_percent": 4.912767 },
@@ -616,7 +619,7 @@ export const CASES_DATA: Case[] = [
     "key": "mythic_case",
     "name": "Мифический кейс",
     "type": "редкость",
-    "price": 244400000,
+    "price": 150000000,
     "categoryEmoji": "🐉",
     "items": [
       { "id": 201, "chance_percent": 13.576768 },
@@ -640,7 +643,7 @@ export const CASES_DATA: Case[] = [
     "key": "legendary_case",
     "name": "Легендарный кейс",
     "type": "редкость",
-    "price": 2602500000,
+    "price": 1000000000,
     "categoryEmoji": "👑",
     "items": [
       { "id": 216, "chance_percent": 28.598965 },
@@ -654,7 +657,7 @@ export const CASES_DATA: Case[] = [
     "key": "clothes_case",
     "name": "Кейс одежда",
     "type": "тематика",
-    "price": 1500,
+    "price": 1400,
     "categoryEmoji": "👕",
     "items": [
       { "id": 21, "chance_percent": 57.438295 },
@@ -669,7 +672,7 @@ export const CASES_DATA: Case[] = [
     "key": "tech_case",
     "name": "Кейс техника",
     "type": "тематика",
-    "price": 5050,
+    "price": 4900,
     "categoryEmoji": "💻",
     "items": [
       { "id": 27, "chance_percent": 19.561838 },
@@ -708,7 +711,7 @@ export const CASES_DATA: Case[] = [
     "key": "cars_case",
     "name": "Кейс автомобили",
     "type": "тематика",
-    "price": 3460000,
+    "price": 3150000,
     "categoryEmoji": "🚗",
     "items": [
       { "id": 160, "chance_percent": 23.025323 },
@@ -734,7 +737,7 @@ export const CASES_DATA: Case[] = [
     "key": "realty_case",
     "name": "Кейс недвижимость",
     "type": "тематика",
-    "price": 16300000,
+    "price": 15000000,
     "categoryEmoji": "🏠",
     "items": [
       { "id": 166, "chance_percent": 67.965006 },
@@ -782,7 +785,7 @@ export const CASES_DATA: Case[] = [
     "key": "luxury_case",
     "name": "Кейс роскошь",
     "type": "тематика",
-    "price": 3910000,
+    "price": 3400000,
     "categoryEmoji": "💎",
     "items": [
       { "id": 147, "chance_percent": 35.609247 },

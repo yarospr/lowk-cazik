@@ -37,5 +37,21 @@ export enum AppScreen {
   DROP_SUMMARY = 'DROP_SUMMARY',
   PROFILE = 'PROFILE',
   ROCKET_MENU = 'ROCKET_MENU',
-  ROCKET_GAME = 'ROCKET_GAME'
+  ROCKET_GAME = 'ROCKET_GAME',
+  UPGRADER_MENU = 'UPGRADER_MENU',
+  UPGRADER_SELECT_TARGET = 'UPGRADER_SELECT_TARGET',
+  UPGRADER_GAME = 'UPGRADER_GAME',
+  SLOTS_MENU = 'SLOTS_MENU',
+  SLOTS_GAME = 'SLOTS_GAME',
+  LEADERBOARD = 'LEADERBOARD'
+}
+
+export interface PlayerProfile {
+  id: string;
+  name: string;
+  balance: number;
+  inventory: InventoryItem[];
+  telegram_id?: string;
+  telegram_username?: string;
+  is_public: boolean;
 }

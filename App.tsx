@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r12';
+const BUILD_MARKER = 'v5069015-r13';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -314,6 +314,38 @@ type PlayerDbRow = {
   is_public?: boolean | null;
 };
 
+type OfferVisibility = 'PUBLIC' | 'LINK_ONLY';
+type OfferStatus = 'ACTIVE' | 'SOLD' | 'CANCELLED';
+
+type MarketOfferDbRow = {
+  offer_id?: string;
+  seller_telegram_id?: string;
+  buyer_telegram_id?: string | null;
+  item_json?: InventoryItem | string | null;
+  price?: number | null;
+  description?: string | null;
+  visibility?: OfferVisibility | string | null;
+  status?: OfferStatus | string | null;
+  created_at?: string | null;
+  sold_at?: string | null;
+};
+
+type MarketOffer = {
+  offer_id: string;
+  seller_telegram_id: string;
+  buyer_telegram_id?: string;
+  item: InventoryItem;
+  price: number;
+  description: string;
+  visibility: OfferVisibility;
+  status: OfferStatus;
+  created_at: string;
+  sold_at?: string;
+  seller_name: string;
+  seller_username?: string;
+  seller_is_public: boolean;
+};
+
 declare global {
   interface Window {
     Telegram?: {
@@ -344,6 +376,73 @@ const parseDbInventory = (raw: PlayerDbRow['inventory_json']): InventoryItem[] =
     }
   }
   return [];
+};
+
+const parseOfferItem = (raw: MarketOfferDbRow['item_json']): InventoryItem | null => {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const record = parsed as Record<string, unknown>;
+  const itemId = Math.floor(toSafeNumber(record.id));
+  const baseItem = itemId > 0 ? getItemById(itemId) : undefined;
+  if (!baseItem && itemId <= 0) return null;
+
+  return {
+    ...(baseItem ?? ({} as BaseItem)),
+    ...(record as InventoryItem),
+    uniqueId: typeof record.uniqueId === 'string' && record.uniqueId ? record.uniqueId : generateUUID(),
+    serial: Math.max(1, Math.floor(toSafeNumber(record.serial) || generateSerial())),
+    obtainedAt: Math.max(1, Math.floor(toSafeNumber(record.obtainedAt) || Date.now())),
+  } as InventoryItem;
+};
+
+const normalizeOfferVisibility = (raw: unknown): OfferVisibility => {
+  return raw === 'LINK_ONLY' ? 'LINK_ONLY' : 'PUBLIC';
+};
+
+const normalizeOfferStatus = (raw: unknown): OfferStatus => {
+  if (raw === 'SOLD') return 'SOLD';
+  if (raw === 'CANCELLED') return 'CANCELLED';
+  return 'ACTIVE';
+};
+
+const mapOfferRow = (
+  row: MarketOfferDbRow,
+  sellersById: Map<string, PlayerDbRow>
+): MarketOffer | null => {
+  const offer_id = typeof row.offer_id === 'string' ? row.offer_id : '';
+  const seller_telegram_id = typeof row.seller_telegram_id === 'string' ? row.seller_telegram_id : '';
+  if (!offer_id || !seller_telegram_id) return null;
+
+  const item = parseOfferItem(row.item_json);
+  if (!item) return null;
+
+  const seller = sellersById.get(seller_telegram_id);
+  const seller_name = seller?.display_name || seller?.first_name || seller?.username || 'Player';
+  const seller_username = seller?.username || undefined;
+
+  return {
+    offer_id,
+    seller_telegram_id,
+    buyer_telegram_id: typeof row.buyer_telegram_id === 'string' ? row.buyer_telegram_id : undefined,
+    item,
+    price: Math.max(0, Math.floor(toSafeNumber(row.price))),
+    description: String(row.description || ''),
+    visibility: normalizeOfferVisibility(row.visibility),
+    status: normalizeOfferStatus(row.status),
+    created_at: String(row.created_at || ''),
+    sold_at: typeof row.sold_at === 'string' ? row.sold_at : undefined,
+    seller_name,
+    seller_username,
+    seller_is_public: Boolean(seller?.is_public),
+  };
 };
 
 const mapDbRowToProfile = (row: PlayerDbRow): PlayerProfile => {
@@ -423,7 +522,8 @@ const BottomNav = ({ activeTab, onTabChange }: { activeTab: string, onTabChange:
         <User className="w-6 h-6" />
       </button>
       <button 
-        className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all text-slate-700 cursor-not-allowed`}
+        onClick={() => onTabChange('market')}
+        className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all ${activeTab === 'market' ? 'text-yellow-400 bg-yellow-500/10' : 'text-slate-500 hover:text-slate-300'}`}
       >
         <Banknote className="w-6 h-6" />
       </button>
@@ -668,6 +768,29 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState<PlayerProfile[]>([]);
   const [isLoadingLeaderboard, setIsLoadingLeaderboard] = useState(false);
 
+  // Market State
+  const [marketOffers, setMarketOffers] = useState<MarketOffer[]>([]);
+  const [isLoadingMarket, setIsLoadingMarket] = useState(false);
+  const [selectedMarketOffer, setSelectedMarketOffer] = useState<MarketOffer | null>(null);
+  const [isBuyingMarketOffer, setIsBuyingMarketOffer] = useState(false);
+  const [showCreateOfferModal, setShowCreateOfferModal] = useState(false);
+  const [createOfferItem, setCreateOfferItem] = useState<InventoryItem | null>(null);
+  const [createOfferPriceInput, setCreateOfferPriceInput] = useState('0');
+  const [createOfferDescription, setCreateOfferDescription] = useState('');
+  const [createOfferVisibility, setCreateOfferVisibility] = useState<OfferVisibility>('PUBLIC');
+  const [createdOfferLink, setCreatedOfferLink] = useState<string | null>(null);
+  const [isPublishingOffer, setIsPublishingOffer] = useState(false);
+  const pendingOfferIdRef = useRef<string | null>(null);
+  const didHandleInitialOfferRef = useRef(false);
+  const initialOfferId = useMemo(() => {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get('offer');
+    } catch {
+      return null;
+    }
+  }, []);
+
   // Rocket Game State
   const [rocketBetItem, setRocketBetItem] = useState<InventoryItem | null>(null);
   const [rocketState, setRocketState] = useState<'IDLE' | 'FLYING' | 'CRASHED' | 'CASHED_OUT'>('IDLE');
@@ -722,6 +845,12 @@ export default function App() {
     return total;
   }, [inventoryValueById, selectedInventoryIds]);
 
+  const selectedSingleInventoryItem = useMemo(() => {
+    if (selectedInventoryIds.size !== 1) return null;
+    const onlyId = Array.from(selectedInventoryIds)[0];
+    return inventory.find(item => item.uniqueId === onlyId) || null;
+  }, [selectedInventoryIds, inventory]);
+
   useEffect(() => {
     setSelectedInventoryIds(prev => {
       if (prev.size === 0) return prev;
@@ -741,6 +870,10 @@ export default function App() {
   useEffect(() => {
     businessStateRef.current = businessState;
   }, [businessState]);
+
+  useEffect(() => {
+    pendingOfferIdRef.current = initialOfferId;
+  }, [initialOfferId]);
 
   // --- INITIALIZATION ---
   useEffect(() => {
@@ -1043,12 +1176,278 @@ export default function App() {
     setIsLoadingLeaderboard(false);
   };
 
+  const buildOfferLink = useCallback((offerId: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('offer', offerId);
+    return url.toString();
+  }, []);
+
+  const copyText = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      alert('Ссылка скопирована');
+    } catch {
+      window.prompt('Скопируйте ссылку', text);
+    }
+  }, []);
+
+  const fetchMarketOffers = useCallback(async () => {
+    setIsLoadingMarket(true);
+    const { data, error } = await supabase
+      .from('market_offers')
+      .select('*')
+      .eq('status', 'ACTIVE')
+      .eq('visibility', 'PUBLIC')
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error || !data) {
+      console.error('Failed to fetch market offers', error);
+      setIsLoadingMarket(false);
+      return;
+    }
+
+    const rows = data as MarketOfferDbRow[];
+    const sellerIds = Array.from(
+      new Set(rows.map(row => String(row.seller_telegram_id || '')).filter(Boolean))
+    );
+    const sellersById = new Map<string, PlayerDbRow>();
+
+    if (sellerIds.length > 0) {
+      const { data: sellerRows, error: sellerError } = await supabase
+        .from('players')
+        .select('telegram_id, username, first_name, display_name, is_public')
+        .in('telegram_id', sellerIds);
+
+      if (!sellerError && sellerRows) {
+        for (const row of sellerRows as PlayerDbRow[]) {
+          const id = String(row.telegram_id || '');
+          if (!id) continue;
+          sellersById.set(id, row);
+        }
+      }
+    }
+
+    const mapped = rows
+      .map(row => mapOfferRow(row, sellersById))
+      .filter(Boolean) as MarketOffer[];
+    setMarketOffers(mapped);
+    setIsLoadingMarket(false);
+  }, []);
+
+  const fetchSingleOffer = useCallback(async (offerId: string) => {
+    const { data, error } = await supabase
+      .from('market_offers')
+      .select('*')
+      .eq('offer_id', offerId)
+      .maybeSingle();
+
+    if (error || !data) {
+      console.error('Failed to fetch market offer', error);
+      return null;
+    }
+
+    const offerRow = data as MarketOfferDbRow;
+    const sellerId = String(offerRow.seller_telegram_id || '');
+    const sellersById = new Map<string, PlayerDbRow>();
+
+    if (sellerId) {
+      const { data: seller, error: sellerError } = await supabase
+        .from('players')
+        .select('telegram_id, username, first_name, display_name, is_public')
+        .eq('telegram_id', sellerId)
+        .maybeSingle();
+      if (!sellerError && seller) {
+        sellersById.set(sellerId, seller as PlayerDbRow);
+      }
+    }
+
+    return mapOfferRow(offerRow, sellersById);
+  }, []);
+
+  const openOfferById = useCallback(async (offerId: string) => {
+    const offer = await fetchSingleOffer(offerId);
+    if (!offer) {
+      alert('Оффер не найден');
+      return false;
+    }
+    setSelectedMarketOffer(offer);
+    setScreen(AppScreen.MARKET_OFFER);
+    setActiveTab('market');
+    return true;
+  }, [fetchSingleOffer]);
+
+  const openCreateOfferModal = useCallback(() => {
+    if (selectedInventoryIds.size !== 1) return;
+    const onlyId = Array.from(selectedInventoryIds)[0];
+    const item = inventory.find(i => i.uniqueId === onlyId) || null;
+    if (!item) return;
+
+    setCreateOfferItem(item);
+    setCreateOfferPriceInput(String(Math.max(0, getItemPrice(item))));
+    setCreateOfferDescription('');
+    setCreateOfferVisibility('PUBLIC');
+    setCreatedOfferLink(null);
+    setShowCreateOfferModal(true);
+  }, [inventory, selectedInventoryIds]);
+
+  const closeCreateOfferModal = useCallback(() => {
+    if (isPublishingOffer) return;
+    setShowCreateOfferModal(false);
+    setCreateOfferItem(null);
+    setCreateOfferPriceInput('0');
+    setCreateOfferDescription('');
+    setCreateOfferVisibility('PUBLIC');
+    setCreatedOfferLink(null);
+  }, [isPublishingOffer]);
+
+  const handlePublishOffer = useCallback(async () => {
+    if (!playerProfile || !createOfferItem) return;
+    const price = Math.max(0, Math.floor(toSafeNumber(createOfferPriceInput)));
+    const description = createOfferDescription.trim();
+    if (!description) {
+      alert('Введите описание');
+      return;
+    }
+
+    const exists = inventory.some(item => item.uniqueId === createOfferItem.uniqueId);
+    if (!exists) {
+      alert('Предмет уже отсутствует в инвентаре');
+      return;
+    }
+
+    const offerId = `offer_${generateUUID()}`;
+    setIsPublishingOffer(true);
+
+    const payload = {
+      offer_id: offerId,
+      seller_telegram_id: playerProfile.id,
+      item_json: createOfferItem,
+      price,
+      description,
+      visibility: createOfferVisibility,
+      status: 'ACTIVE',
+    };
+
+    const { error } = await supabase.from('market_offers').insert(payload);
+    if (error) {
+      alert(`Ошибка публикации: ${error.message}`);
+      setIsPublishingOffer(false);
+      return;
+    }
+
+    setInventory(prev => prev.filter(item => item.uniqueId !== createOfferItem.uniqueId));
+    setSelectedInventoryIds(new Set());
+    setCreatedOfferLink(buildOfferLink(offerId));
+    await fetchMarketOffers();
+    setIsPublishingOffer(false);
+  }, [
+    playerProfile,
+    createOfferItem,
+    createOfferPriceInput,
+    createOfferDescription,
+    createOfferVisibility,
+    inventory,
+    buildOfferLink,
+    fetchMarketOffers,
+  ]);
+
+  const handleBuySelectedOffer = useCallback(async () => {
+    if (!selectedMarketOffer || !playerProfile) return;
+    if (selectedMarketOffer.status !== 'ACTIVE') {
+      alert('Оффер уже недоступен');
+      return;
+    }
+    if (selectedMarketOffer.seller_telegram_id === playerProfile.id) {
+      alert('Нельзя купить собственный оффер');
+      return;
+    }
+    if (balance < selectedMarketOffer.price) {
+      alert('Недостаточно звезд');
+      return;
+    }
+
+    setIsBuyingMarketOffer(true);
+    const soldAt = new Date().toISOString();
+
+    const { data: claimed, error: claimError } = await supabase
+      .from('market_offers')
+      .update({
+        status: 'SOLD',
+        buyer_telegram_id: playerProfile.id,
+        sold_at: soldAt,
+      })
+      .eq('offer_id', selectedMarketOffer.offer_id)
+      .eq('status', 'ACTIVE')
+      .select('*')
+      .maybeSingle();
+
+    if (claimError || !claimed) {
+      alert('Оффер уже куплен другим игроком');
+      setIsBuyingMarketOffer(false);
+      await fetchMarketOffers();
+      return;
+    }
+
+    setBalance(prev => prev - selectedMarketOffer.price);
+    setInventory(prev => {
+      const exists = prev.some(item => item.uniqueId === selectedMarketOffer.item.uniqueId);
+      if (exists) return prev;
+      return [selectedMarketOffer.item, ...prev];
+    });
+
+    const { data: seller, error: sellerError } = await supabase
+      .from('players')
+      .select('balance')
+      .eq('telegram_id', selectedMarketOffer.seller_telegram_id)
+      .maybeSingle();
+
+    if (!sellerError && seller) {
+      const sellerBalance = Math.floor(toSafeNumber((seller as PlayerDbRow).balance));
+      await supabase
+        .from('players')
+        .update({ balance: sellerBalance + selectedMarketOffer.price })
+        .eq('telegram_id', selectedMarketOffer.seller_telegram_id);
+    }
+
+    setSelectedMarketOffer(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        status: 'SOLD',
+        buyer_telegram_id: playerProfile.id,
+        sold_at: soldAt,
+      };
+    });
+
+    await fetchMarketOffers();
+    setIsBuyingMarketOffer(false);
+  }, [selectedMarketOffer, playerProfile, balance, fetchMarketOffers]);
+
+  useEffect(() => {
+    if (screen !== AppScreen.MARKET_MENU) return;
+    fetchMarketOffers();
+    const timer = window.setInterval(() => {
+      fetchMarketOffers();
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [screen, fetchMarketOffers]);
+
+  useEffect(() => {
+    if (!isLoaded || !playerProfile || didHandleInitialOfferRef.current) return;
+    didHandleInitialOfferRef.current = true;
+    const offerId = pendingOfferIdRef.current;
+    if (!offerId) return;
+    openOfferById(offerId);
+  }, [isLoaded, playerProfile, openOfferById]);
+
   useEffect(() => {
     if (screen === AppScreen.PROFILE) setActiveTab('profile');
     else if (screen === AppScreen.LEADERBOARD) {
       setActiveTab('leaderboard');
       fetchLeaderboard();
     }
+    else if (screen === AppScreen.MARKET_MENU || screen === AppScreen.MARKET_OFFER) setActiveTab('market');
     else if (screen === AppScreen.GAMES_MENU || screen === AppScreen.CASE_LIST || screen === AppScreen.ROCKET_MENU || screen === AppScreen.UPGRADER_MENU || screen === AppScreen.SLOTS_MENU || screen === AppScreen.BUSINESS_MENU) setActiveTab('games');
   }, [screen]);
 
@@ -1057,6 +1456,7 @@ export default function App() {
     if (tab === 'games') setScreen(AppScreen.GAMES_MENU);
     if (tab === 'profile') setScreen(AppScreen.PROFILE);
     if (tab === 'leaderboard') setScreen(AppScreen.LEADERBOARD);
+    if (tab === 'market') setScreen(AppScreen.MARKET_MENU);
   };
 
   // --- SLOTS LOGIC ---
@@ -1531,6 +1931,222 @@ export default function App() {
           </div>
       </div>
   );
+
+  const renderCreateOfferModal = () => {
+    if (!showCreateOfferModal) return null;
+
+    return (
+      <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+        <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl">
+          {createdOfferLink ? (
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-white">{'Оффер опубликован'}</h3>
+              <p className="text-xs text-slate-400 break-all">{createdOfferLink}</p>
+              <div className="grid grid-cols-2 gap-2">
+                <Button onClick={() => copyText(createdOfferLink)} className="w-full">
+                  {'Копировать'}
+                </Button>
+                <Button onClick={closeCreateOfferModal} variant="secondary" className="w-full">
+                  {'Закрыть'}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <h3 className="text-lg font-bold text-white">{'Выставить на продажу'}</h3>
+              {createOfferItem && (
+                <div className="flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <div className="text-3xl">{createOfferItem.emg}</div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-sm text-white truncate">{getItemName(createOfferItem)}</div>
+                    <div className="text-xs text-slate-400">#{createOfferItem.uniqueId.slice(0, 8)}</div>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{'Цена'}</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={createOfferPriceInput}
+                  onChange={(e) => setCreateOfferPriceInput(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white outline-none focus:border-yellow-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{'Описание'}</label>
+                <textarea
+                  value={createOfferDescription}
+                  onChange={(e) => setCreateOfferDescription(e.target.value)}
+                  rows={3}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white outline-none focus:border-yellow-500 resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{'Доступ'}</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setCreateOfferVisibility('PUBLIC')}
+                    className={`py-2 rounded-lg border text-xs font-bold ${createOfferVisibility === 'PUBLIC' ? 'bg-yellow-500 text-black border-yellow-500' : 'bg-slate-950 text-slate-300 border-slate-700'}`}
+                  >
+                    {'Для всех'}
+                  </button>
+                  <button
+                    onClick={() => setCreateOfferVisibility('LINK_ONLY')}
+                    className={`py-2 rounded-lg border text-xs font-bold ${createOfferVisibility === 'LINK_ONLY' ? 'bg-yellow-500 text-black border-yellow-500' : 'bg-slate-950 text-slate-300 border-slate-700'}`}
+                  >
+                    {'Только по ссылке'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <Button onClick={closeCreateOfferModal} variant="secondary" className="w-full">
+                  {'Отмена'}
+                </Button>
+                <Button onClick={handlePublishOffer} disabled={isPublishingOffer} className="w-full">
+                  {isPublishingOffer ? 'Публикуем...' : 'Опубликовать'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMarketMenu = () => (
+    <div className="flex flex-col h-full bg-slate-950">
+      <div className="p-4 bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-10 flex items-center justify-between">
+        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+          <Banknote className="w-6 h-6 text-yellow-500" /> {'Рынок'}
+        </h2>
+        <button
+          onClick={() => fetchMarketOffers()}
+          className="text-xs text-slate-300 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 hover:bg-slate-700"
+        >
+          {'Обновить'}
+        </button>
+      </div>
+
+      <div className="p-4 pb-24 overflow-y-auto custom-scrollbar space-y-3">
+        {isLoadingMarket ? (
+          <div className="py-20 flex justify-center text-yellow-500"><Loader2 className="w-8 h-8 animate-spin" /></div>
+        ) : marketOffers.length === 0 ? (
+          <div className="text-center py-16 text-slate-500">{'Пока нет активных предложений'}</div>
+        ) : (
+          marketOffers.map((offer) => (
+            <button
+              key={offer.offer_id}
+              onClick={() => { void openOfferById(offer.offer_id); }}
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-left hover:border-yellow-500/40 transition-all"
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-12 h-12 bg-slate-800 border border-slate-700 rounded-lg flex items-center justify-center text-2xl">
+                  {offer.item.emg}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-white text-sm truncate">{getItemName(offer.item)}</div>
+                  <div className="text-[11px] text-slate-400">{`ID: ${offer.item.uniqueId.slice(0, 10)}`}</div>
+                  <div className="text-yellow-400 text-xs font-bold flex items-center gap-1 mt-1">
+                    <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(offer.price)}
+                  </div>
+                  <div className="text-xs text-slate-400 mt-1 line-clamp-2">
+                    {offer.description}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-2">
+                    {offer.seller_is_public && offer.seller_username ? (
+                      <a href={`https://t.me/${offer.seller_username}`} target="_blank" rel="noopener noreferrer" className="hover:text-blue-400">
+                        {`Продавец: ${offer.seller_name} (@${offer.seller_username})`}
+                      </a>
+                    ) : (
+                      <span>{`Продавец: ${offer.seller_name}`}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+
+  const renderMarketOffer = () => {
+    if (!selectedMarketOffer) return null;
+
+    const offer = selectedMarketOffer;
+    const isOwnOffer = offer.seller_telegram_id === playerProfile?.id;
+    const canBuy = offer.status === 'ACTIVE' && !isOwnOffer && balance >= offer.price;
+    const offerLink = buildOfferLink(offer.offer_id);
+
+    return (
+      <div className="flex flex-col h-full bg-slate-950">
+        <div className="p-4 flex items-center gap-2 bg-slate-950 sticky top-0 z-10 border-b border-slate-800">
+          <button onClick={() => setScreen(AppScreen.MARKET_MENU)} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800">
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <h2 className="text-xl font-bold text-white">{'Оффер рынка'}</h2>
+        </div>
+
+        <div className="p-4 pb-24 overflow-y-auto custom-scrollbar space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <div className="flex items-start gap-3">
+              <div className="w-14 h-14 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center text-3xl">
+                {offer.item.emg}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-white">{getItemName(offer.item)}</div>
+                <div className="text-xs text-slate-400">{`ID: ${offer.item.uniqueId}`}</div>
+                <div className="text-yellow-400 font-bold text-sm mt-1 flex items-center gap-1">
+                  <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(offer.price)}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 text-xs text-slate-400 whitespace-pre-wrap break-words">
+              {offer.description}
+            </div>
+
+            <div className="mt-4 text-xs text-slate-500">
+              {offer.seller_is_public && offer.seller_username ? (
+                <a href={`https://t.me/${offer.seller_username}`} target="_blank" rel="noopener noreferrer" className="hover:text-blue-400">
+                  {`Продавец: ${offer.seller_name} (@${offer.seller_username})`}
+                </a>
+              ) : (
+                <span>{`Продавец: ${offer.seller_name}`}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <div className="text-xs uppercase text-slate-500 font-bold mb-2">{'Ссылка на оффер'}</div>
+            <div className="text-xs text-slate-400 break-all">{offerLink}</div>
+            <Button onClick={() => copyText(offerLink)} className="w-full mt-3">
+              {'Копировать ссылку'}
+            </Button>
+          </div>
+
+          {offer.status !== 'ACTIVE' ? (
+            <Button disabled variant="secondary" className="w-full">
+              {'Оффер уже недоступен'}
+            </Button>
+          ) : isOwnOffer ? (
+            <Button disabled variant="secondary" className="w-full">
+              {'Это ваш оффер'}
+            </Button>
+          ) : (
+            <Button onClick={handleBuySelectedOffer} disabled={!canBuy || isBuyingMarketOffer} className="w-full py-4 text-lg">
+              {isBuyingMarketOffer ? 'Покупка...' : (canBuy ? 'Купить' : 'Недостаточно звезд')}
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   const renderGamesMenu = () => (
     <div className="p-4 flex flex-col gap-4 pb-24">
@@ -2509,6 +3125,11 @@ export default function App() {
            <Button onClick={sellSelected} variant="success" className="w-full py-3 shadow-green-500/20">
                Продать за {formatMoney(sellAmount)} <Star className="w-4 h-4 fill-white" />
            </Button>
+           {selectedCount === 1 && selectedSingleInventoryItem && (
+             <Button onClick={openCreateOfferModal} variant="secondary" className="w-full py-3 mt-2">
+               {'Выставить на продажу'}
+             </Button>
+           )}
         </div>
       </div>
     );
@@ -2532,6 +3153,7 @@ export default function App() {
       
       {showWelcomeModal && renderWelcomeModal()}
       {showSettingsModal && renderSettingsModal()}
+      {showCreateOfferModal && renderCreateOfferModal()}
 
       {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && (
         <Header balance={balance} />
@@ -2539,6 +3161,8 @@ export default function App() {
 
       {screen === AppScreen.GAMES_MENU && renderGamesMenu()}
       {screen === AppScreen.BUSINESS_MENU && renderBusinessMenu()}
+      {screen === AppScreen.MARKET_MENU && renderMarketMenu()}
+      {screen === AppScreen.MARKET_OFFER && renderMarketOffer()}
       {screen === AppScreen.CASE_LIST && renderCaseList()}
       {screen === AppScreen.CASE_DETAIL && renderCaseDetail()}
       

@@ -1,15 +1,18 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Menu, ChevronRight, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r4';
+const BUILD_MARKER = 'v5069015-r5';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
+const ITEM_NAME_KEY = '\u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435';
+const ITEM_PRICE_KEY = '\u0446\u0435\u043d\u0430';
+const ITEM_RARITY_KEY = '\u0440\u0435\u0434\u043a\u043e\u0441\u0442\u044c';
 
 type CaseSampler = {
   cumulative: number[];
@@ -85,10 +88,21 @@ const toSafeNumber = (value: unknown): number => {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 };
+
+const getItemName = (item: Partial<BaseItem> | InventoryItem): string => {
+  const value = (item as Record<string, unknown>)[ITEM_NAME_KEY];
+  return typeof value === 'string' ? value : '';
+};
+
+const getItemRarity = (item: Partial<BaseItem> | InventoryItem): string => {
+  const value = (item as Record<string, unknown>)[ITEM_RARITY_KEY];
+  return typeof value === 'string' ? value : '';
+};
+
 const getItemPrice = (item: Partial<BaseItem> | InventoryItem | null | undefined): number => {
   if (!item) return 0;
   const record = item as Record<string, unknown>;
-  const directPrice = toSafeNumber(record.price);
+  const directPrice = toSafeNumber(record.price ?? record[ITEM_PRICE_KEY]);
   if (directPrice > 0) return directPrice;
   for (const [key, value] of Object.entries(record)) {
     if (IGNORED_NUMERIC_KEYS.has(key)) continue;
@@ -435,18 +449,17 @@ const QuantitySelector = ({ value, onChange }: { value: number, onChange: (val: 
   const options = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
   const maxIndex = options.length - 1;
   const selectedIndex = Math.min(maxIndex, Math.max(0, value - 1));
+  const cellWidthExpr = `(100% - 1rem) / ${options.length}`;
 
   return (
     <div className="relative bg-slate-800 rounded-xl p-2 mb-4 overflow-hidden">
-      <div className="absolute inset-0 p-2 pointer-events-none">
-        <div
-          className="absolute top-1 bottom-1 left-0 bg-yellow-500 rounded-lg transition-transform duration-300 ease-out shadow-[0_0_15px_rgba(234,179,8,0.5)]"
-          style={{
-            width: `calc(100% / ${options.length})`,
-            transform: `translate3d(${selectedIndex * 100}%, 0, 0)`,
-          }}
-        />
-      </div>
+      <div
+        className="absolute top-1 bottom-1 bg-yellow-500 rounded-lg transition-all duration-300 ease-out shadow-[0_0_15px_rgba(234,179,8,0.5)]"
+        style={{
+          width: `calc(${cellWidthExpr})`,
+          left: `calc(0.5rem + (${cellWidthExpr}) * ${selectedIndex})`,
+        }}
+      />
 
       <div className="relative z-10 grid grid-cols-10">
         {options.map((num) => (
@@ -462,6 +475,41 @@ const QuantitySelector = ({ value, onChange }: { value: number, onChange: (val: 
     </div>
   );
 };
+
+type InventoryGridItemProps = {
+  item: InventoryItem;
+  isSelected: boolean;
+  onToggle: (id: string) => void;
+};
+
+const InventoryGridItem: React.FC<InventoryGridItemProps> = React.memo(({ item, isSelected, onToggle }) => {
+  const rarityCol = getRarityColor(getItemRarity(item));
+  const displayPrice = getItemPrice(item);
+  const displayName = getItemName(item);
+
+  return (
+    <button
+      onClick={() => onToggle(item.uniqueId)}
+      className={`relative aspect-[4/5] rounded-xl border-2 flex flex-col items-center justify-between p-2 transition-all hover:scale-[1.02] ${isSelected ? 'border-yellow-400 bg-yellow-400/10 shadow-[0_0_15px_rgba(250,204,21,0.3)]' : `${rarityCol} bg-opacity-40`}`}
+    >
+      {isSelected && (
+        <div className="absolute top-2 right-2 bg-yellow-400 rounded-full p-0.5 z-20">
+          <Check className="w-3 h-3 text-black stroke-[3]" />
+        </div>
+      )}
+
+      <div className="text-4xl mt-2 drop-shadow-lg">{item.emg}</div>
+
+      <div className="w-full text-center">
+        <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{displayName}</div>
+        <div className="text-[9px] font-mono text-slate-500">#{item.serial}</div>
+        <div className="mt-1 text-xs font-bold text-yellow-400 flex items-center justify-center gap-0.5 bg-black/30 rounded py-0.5">
+          <Star className="w-2.5 h-2.5 fill-yellow-400" /> {formatMoney(displayPrice)}
+        </div>
+      </div>
+    </button>
+  );
+});
 
 // --- MAIN APP ---
 
@@ -516,6 +564,42 @@ export default function App() {
   const [slotsSpinState, setSlotsSpinState] = useState<'IDLE' | 'PRE_SPIN' | 'SPINNING' | 'FINISHED'>('IDLE');
   const [slotsWinItem, setSlotsWinItem] = useState<BaseItem | null>(null);
   const [slotsReelStrips, setSlotsReelStrips] = useState<{item: BaseItem, payout: number}[][]>([[], [], []]);
+
+  const inventoryValueById = useMemo(() => {
+    const valueById = new Map<string, number>();
+    let total = 0;
+    for (const item of inventory) {
+      const value = getItemPrice(item);
+      valueById.set(item.uniqueId, value);
+      total += value;
+    }
+    return { valueById, total };
+  }, [inventory]);
+
+  const selectedSellValue = useMemo(() => {
+    if (selectedInventoryIds.size === 0) return 0;
+    let total = 0;
+    for (const id of selectedInventoryIds) {
+      total += inventoryValueById.valueById.get(id) ?? 0;
+    }
+    return total;
+  }, [inventoryValueById, selectedInventoryIds]);
+
+  useEffect(() => {
+    setSelectedInventoryIds(prev => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (inventoryValueById.valueById.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [inventoryValueById]);
 
   // --- INITIALIZATION ---
   useEffect(() => {
@@ -956,10 +1040,11 @@ export default function App() {
   };
 
   const sellSelected = () => {
-    const itemsToSell = inventory.filter(i => selectedInventoryIds.has(i.uniqueId));
-    const totalValue = sumItemPrices(itemsToSell);
-    
-    setInventory(prev => prev.filter(i => !selectedInventoryIds.has(i.uniqueId)));
+    if (selectedInventoryIds.size === 0) return;
+    const idsToSell = new Set(selectedInventoryIds);
+    const totalValue = selectedSellValue;
+
+    setInventory(prev => prev.filter(i => !idsToSell.has(i.uniqueId)));
     setBalance(prev => prev + totalValue);
     setSelectedInventoryIds(new Set());
   };
@@ -975,16 +1060,31 @@ export default function App() {
     setSelectedInventoryIds(new Set());
     setShowSellAllConfirm(false);
 
-    try {
-      const totalValue = sumItemPrices(inventory);
-      setInventory([]);
-      setBalance(prev => prev + totalValue);
-    } catch (error) {
-      console.error('Failed to sell all inventory items', error);
-    } finally {
-      setIsSellAllPending(false);
-    }
+    const totalValue = inventoryValueById.total;
+    window.requestAnimationFrame(() => {
+      try {
+        setInventory([]);
+        setBalance(prev => prev + totalValue);
+      } catch (error) {
+        console.error('Failed to sell all inventory items', error);
+      } finally {
+        window.requestAnimationFrame(() => setIsSellAllPending(false));
+      }
+    });
   };
+
+  const toggleInventorySelection = useCallback((id: string) => {
+    setSelectedInventoryIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearInventorySelection = useCallback(() => {
+    setSelectedInventoryIds(new Set());
+  }, []);
   // --- RENDERERS ---
 
   const renderWelcomeModal = () => (
@@ -1205,7 +1305,7 @@ export default function App() {
               </div>
           ) : (
               inventory.map(item => {
-                  const rarityCol = getRarityColor(item.редкость);
+                  const rarityCol = getRarityColor(getItemRarity(item));
                   return (
                       <button 
                           key={item.uniqueId}
@@ -1220,9 +1320,9 @@ export default function App() {
                       >
                           <div className="text-4xl mt-2 drop-shadow-lg">{item.emg}</div>
                           <div className="w-full text-center">
-                              <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{item.название}</div>
+                              <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{getItemName(item)}</div>
                               <div className="mt-1 text-xs font-bold text-yellow-400 flex items-center justify-center gap-0.5 bg-black/30 rounded py-0.5">
-                                  <Star className="w-2.5 h-2.5 fill-yellow-400" /> {formatMoney(item.цена)}
+                                  <Star className="w-2.5 h-2.5 fill-yellow-400" /> {formatMoney(getItemPrice(item))}
                               </div>
                           </div>
                       </button>
@@ -1341,7 +1441,7 @@ export default function App() {
               </div>
           ) : (
               inventory.map(item => {
-                  const rarityCol = getRarityColor(item.редкость);
+                  const rarityCol = getRarityColor(getItemRarity(item));
                   return (
                       <button 
                           key={item.uniqueId}
@@ -1353,9 +1453,9 @@ export default function App() {
                       >
                           <div className="text-4xl mt-2 drop-shadow-lg">{item.emg}</div>
                           <div className="w-full text-center">
-                              <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{item.название}</div>
+                              <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{getItemName(item)}</div>
                               <div className="mt-1 text-xs font-bold text-yellow-400 flex items-center justify-center gap-0.5 bg-black/30 rounded py-0.5">
-                                  <Star className="w-2.5 h-2.5 fill-yellow-400" /> {formatMoney(item.цена)}
+                                  <Star className="w-2.5 h-2.5 fill-yellow-400" /> {formatMoney(getItemPrice(item))}
                               </div>
                           </div>
                       </button>
@@ -1837,8 +1937,8 @@ export default function App() {
 
         <div className={`grid gap-4 w-full ${droppedItems.length === 1 ? 'grid-cols-1' : 'grid-cols-2'} mb-8`}>
            {droppedItems.map((item, idx) => {
-              const rarityCol = getRarityColor(item.редкость);
-              const glow = getRarityGlow(item.редкость);
+              const rarityCol = getRarityColor(getItemRarity(item));
+              const glow = getRarityGlow(getItemRarity(item));
               
               return (
                 <div key={idx} className={`relative group bg-slate-900 border-2 rounded-xl p-4 flex flex-col items-center overflow-hidden animate-in zoom-in duration-500 fill-mode-backwards ${rarityCol} ${glow}`} style={{animationDelay: `${idx * 100}ms`}}>
@@ -1847,7 +1947,7 @@ export default function App() {
                    <div className="font-bold text-white z-10 text-center leading-tight text-sm">{item.название}</div>
                    <div className="text-xs text-slate-400 mt-1 font-mono z-10">#{item.serial.toString().padStart(4, '0')}</div>
                    <div className="mt-3 px-3 py-1 bg-black/40 rounded-full text-yellow-400 text-sm font-bold flex items-center gap-1 z-10 border border-yellow-500/20">
-                      <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(item.цена)}
+                      <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(getItemPrice(item))}
                    </div>
                 </div>
               )
@@ -1869,16 +1969,9 @@ export default function App() {
   }
 
   const renderProfile = () => {
-    const sellAmount = isSellAllPending ? 0 : sumItemPrices(inventory.filter(i => selectedInventoryIds.has(i.uniqueId)));
+    const sellAmount = isSellAllPending ? 0 : selectedSellValue;
     const selectedCount = selectedInventoryIds.size;
-    const totalInvValue = isSellAllPending ? 0 : sumItemPrices(inventory);
-
-    const toggleSelection = (id: string) => {
-      const newSet = new Set(selectedInventoryIds);
-      if (newSet.has(id)) newSet.delete(id);
-      else newSet.add(id);
-      setSelectedInventoryIds(newSet);
-    };
+    const totalInvValue = isSellAllPending ? 0 : inventoryValueById.total;
 
     return (
       <div className="flex flex-col h-full bg-slate-950 relative">
@@ -1958,31 +2051,13 @@ export default function App() {
                 </div>
             ) : (
                 inventory.map(item => {
-                    const isSelected = selectedInventoryIds.has(item.uniqueId);
-                    const rarityCol = getRarityColor(item.редкость);
-                    
                     return (
-                        <button 
+                        <InventoryGridItem
                             key={item.uniqueId}
-                            onClick={() => toggleSelection(item.uniqueId)}
-                            className={`relative aspect-[4/5] rounded-xl border-2 flex flex-col items-center justify-between p-2 transition-all hover:scale-[1.02] ${isSelected ? 'border-yellow-400 bg-yellow-400/10 shadow-[0_0_15px_rgba(250,204,21,0.3)]' : `${rarityCol} bg-opacity-40`}`}
-                        >
-                            {isSelected && (
-                                <div className="absolute top-2 right-2 bg-yellow-400 rounded-full p-0.5 z-20">
-                                    <Check className="w-3 h-3 text-black stroke-[3]" />
-                                </div>
-                            )}
-                            
-                            <div className="text-4xl mt-2 drop-shadow-lg">{item.emg}</div>
-                            
-                            <div className="w-full text-center">
-                                <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{item.название}</div>
-                                <div className="text-[9px] font-mono text-slate-500">#{item.serial}</div>
-                                <div className="mt-1 text-xs font-bold text-yellow-400 flex items-center justify-center gap-0.5 bg-black/30 rounded py-0.5">
-                                    <Star className="w-2.5 h-2.5 fill-yellow-400" /> {formatMoney(item.цена)}
-                                </div>
-                            </div>
-                        </button>
+                            item={item}
+                            isSelected={selectedInventoryIds.has(item.uniqueId)}
+                            onToggle={toggleInventorySelection}
+                        />
                     );
                 })
             )}
@@ -1991,7 +2066,7 @@ export default function App() {
         <div className={`fixed bottom-20 left-0 w-full bg-slate-900 border-t border-slate-800 p-4 transition-transform duration-300 max-w-md mx-auto right-0 z-30 ${selectedCount > 0 ? 'translate-y-0' : 'translate-y-[150%]'}`}>
            <div className="flex items-center justify-between mb-3">
               <div className="text-slate-400 text-sm">Выбрано: <span className="text-white font-bold">{selectedCount}</span></div>
-              <button onClick={() => setSelectedInventoryIds(new Set())} className="text-slate-400 hover:text-white text-sm">Снять выделение</button>
+              <button onClick={clearInventorySelection} className="text-slate-400 hover:text-white text-sm">Снять выделение</button>
            </div>
            <Button onClick={sellSelected} variant="success" className="w-full py-3 shadow-green-500/20">
                Продать за {formatMoney(sellAmount)} <Star className="w-4 h-4 fill-white" />

@@ -1,15 +1,48 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Menu, ChevronRight, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r3';
+const BUILD_MARKER = 'v5069015-r4';
+const ALL_ITEMS = ITEMS_DATA["items_db"];
+const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
+const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
+
+type CaseSampler = {
+  cumulative: number[];
+  drops: CaseItemDrop[];
+  total: number;
+};
+
+const CASE_SAMPLER_CACHE = new Map<string, CaseSampler>();
 
 const getItemById = (id: number): BaseItem | undefined => {
-  return ITEMS_DATA["items_db"].find((i) => i.id === id);
+  return ITEM_BY_ID.get(id);
+};
+
+const getCaseSampler = (c: Case): CaseSampler => {
+  const cached = CASE_SAMPLER_CACHE.get(c.key);
+  if (cached && cached.drops.length === c.items.length) {
+    return cached;
+  }
+
+  const cumulative: number[] = [];
+  let total = 0;
+  for (const drop of c.items) {
+    total += drop.chance_percent;
+    cumulative.push(total);
+  }
+
+  const sampler: CaseSampler = {
+    cumulative,
+    drops: c.items,
+    total: total > 0 ? total : 100,
+  };
+  CASE_SAMPLER_CACHE.set(c.key, sampler);
+  return sampler;
 };
 
 const getRarityColor = (rarity: string) => {
@@ -57,9 +90,8 @@ const getItemPrice = (item: Partial<BaseItem> | InventoryItem | null | undefined
   const record = item as Record<string, unknown>;
   const directPrice = toSafeNumber(record.price);
   if (directPrice > 0) return directPrice;
-  const ignoredNumericKeys = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
   for (const [key, value] of Object.entries(record)) {
-    if (ignoredNumericKeys.has(key)) continue;
+    if (IGNORED_NUMERIC_KEYS.has(key)) continue;
     const parsed = toSafeNumber(value);
     if (parsed > 0) return parsed;
   }
@@ -78,30 +110,34 @@ const generateSerial = () => {
 };
 
 const getRandomItemFromCase = (c: Case): CaseItemDrop => {
-  let random = Math.random() * 100;
-  let accumulator = 0;
-  for (const item of c.items) {
-    accumulator += item.chance_percent;
-    if (random <= accumulator) {
-      return item;
+  const sampler = getCaseSampler(c);
+  const target = Math.random() * sampler.total;
+
+  let low = 0;
+  let high = sampler.cumulative.length - 1;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (target <= sampler.cumulative[mid]) {
+      high = mid;
+    } else {
+      low = mid + 1;
     }
   }
-  return c.items[c.items.length - 1];
+
+  return sampler.drops[low] ?? sampler.drops[sampler.drops.length - 1];
 };
 
 const findClosestItemByPrice = (targetPrice: number): BaseItem => {
-  const allItems = ITEMS_DATA["items_db"];
-  if (!allItems || allItems.length === 0) throw new Error("No items DB");
+  if (!ALL_ITEMS || ALL_ITEMS.length === 0) throw new Error("No items DB");
   
-  return allItems.reduce((prev, curr) => {
+  return ALL_ITEMS.reduce((prev, curr) => {
     return (Math.abs(curr.цена - targetPrice) < Math.abs(prev.цена - targetPrice) ? curr : prev);
   });
 };
 
 const getRandomItemNearPrice = (targetPrice: number): BaseItem => {
-  const allItems = ITEMS_DATA["items_db"];
   // Range: 0.7x to 1.3x price
-  const candidates = allItems.filter(i => i.цена >= targetPrice * 0.7 && i.цена <= targetPrice * 1.3);
+  const candidates = ALL_ITEMS.filter(i => i.цена >= targetPrice * 0.7 && i.цена <= targetPrice * 1.3);
   
   if (candidates.length > 0) {
       const idx = Math.floor(Math.random() * candidates.length);
@@ -266,66 +302,76 @@ const TOTAL_SLOT_WIDTH = CARD_WIDTH_PX + (MARGIN_PX * 2);
 const WINNER_INDEX = 40;
 const TOTAL_ITEMS_IN_STRIP = 60;
 
-const Roulette: React.FC<{ caseData: Case, winner: BaseItem, onComplete: () => void }> = ({ caseData, winner, onComplete }) => {
-  const [strip, setStrip] = useState<BaseItem[]>([]);
+type RouletteStripEntry = {
+  item: BaseItem;
+  chance: number;
+};
+
+const buildRouletteStrip = (caseData: Case, winner: BaseItem): RouletteStripEntry[] => {
+  const itemChanceMap = new Map<number, number>();
+  for (const drop of caseData.items) {
+    itemChanceMap.set(drop.id, drop.chance_percent);
+  }
+
+  const winnerChance = itemChanceMap.get(winner.id) ?? 0;
+  const strip: RouletteStripEntry[] = [];
+
+  for (let i = 0; i < TOTAL_ITEMS_IN_STRIP; i += 1) {
+    if (i === WINNER_INDEX) {
+      strip.push({ item: winner, chance: winnerChance });
+      continue;
+    }
+
+    const randomDrop = getRandomItemFromCase(caseData);
+    const item = getItemById(randomDrop.id) ?? winner;
+    const chance = itemChanceMap.get(item.id) ?? randomDrop.chance_percent ?? 0;
+    strip.push({ item, chance });
+  }
+
+  return strip;
+};
+
+const Roulette: React.FC<{ caseData: Case, winner: BaseItem, onComplete: () => void }> = React.memo(({ caseData, winner, onComplete }) => {
+  const [strip] = useState<RouletteStripEntry[]>(() => buildRouletteStrip(caseData, winner));
   const [isSpinning, setIsSpinning] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [finalTranslate, setFinalTranslate] = useState(0);
 
-  const itemChanceMap = useMemo(() => {
-    const map = new Map<number, number>();
-    caseData.items.forEach(i => map.set(i.id, i.chance_percent));
-    return map;
-  }, [caseData]);
-
   useEffect(() => {
-    const newStrip: BaseItem[] = [];
-    for (let i = 0; i < TOTAL_ITEMS_IN_STRIP; i++) {
-      if (i === WINNER_INDEX) {
-        newStrip.push(winner);
-      } else {
-        const randomDrop = getRandomItemFromCase(caseData);
-        const item = getItemById(randomDrop.id);
-        newStrip.push(item || winner);
-      }
-    }
-    setStrip(newStrip);
-
     const containerWidth = containerRef.current?.getBoundingClientRect().width || window.innerWidth;
     const containerCenter = containerWidth / 2;
     const winnerCenterPosition = (WINNER_INDEX * TOTAL_SLOT_WIDTH) + (TOTAL_SLOT_WIDTH / 2);
     const jitter = (Math.random() * (CARD_WIDTH_PX * 0.7)) - (CARD_WIDTH_PX * 0.35);
     const translate = containerCenter - winnerCenterPosition + jitter;
-    
+
     setFinalTranslate(translate);
 
-    const timer = setTimeout(() => setIsSpinning(true), 100);
-    return () => clearTimeout(timer);
-  }, [caseData, winner]);
+    const timer = window.setTimeout(() => setIsSpinning(true), 100);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   return (
     <div ref={containerRef} className="relative w-full h-44 bg-slate-950 overflow-hidden border-y-4 border-yellow-500 shadow-2xl mb-4 rounded-lg flex-shrink-0">
       <div className="absolute left-1/2 top-0 bottom-0 w-1 bg-yellow-400 z-20 shadow-[0_0_15px_rgba(250,204,21,1)] -translate-x-1/2" />
       <div className="absolute left-1/2 top-0 -translate-x-1/2 z-20 text-yellow-400 text-2xl drop-shadow-lg">▼</div>
 
-      <div 
+      <div
         className="flex h-full items-center absolute left-0 will-change-transform"
         style={{
-          transform: `translateX(${isSpinning ? finalTranslate : 0}px)`,
-          transition: 'transform 4s cubic-bezier(0.1, 0.85, 0.1, 1)', 
+          transform: `translate3d(${isSpinning ? finalTranslate : 0}px, 0, 0)`,
+          transition: 'transform 4s cubic-bezier(0.1, 0.85, 0.1, 1)',
         }}
         onTransitionEnd={onComplete}
       >
-        {strip.map((item, idx) => {
+        {strip.map(({ item, chance }, idx) => {
            const cardStyle = getRouletteCardStyle(item.редкость);
-           const chance = itemChanceMap.get(item.id) || 0;
-           
+
            return (
-            <div 
-              key={idx} 
+            <div
+              key={idx}
               className={`flex-shrink-0 flex flex-col items-center justify-between p-2 relative shadow-lg rounded-lg border-4 ${cardStyle}`}
-              style={{ 
-                width: `${CARD_WIDTH_PX}px`, 
+              style={{
+                width: `${CARD_WIDTH_PX}px`,
                 height: '140px',
                 marginLeft: `${MARGIN_PX}px`,
                 marginRight: `${MARGIN_PX}px`
@@ -340,12 +386,14 @@ const Roulette: React.FC<{ caseData: Case, winner: BaseItem, onComplete: () => v
            );
         })}
       </div>
-      
+
       <div className="absolute inset-y-0 left-0 w-12 bg-gradient-to-r from-slate-950 to-transparent z-10 pointer-events-none" />
       <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-slate-950 to-transparent z-10 pointer-events-none" />
     </div>
   );
-};
+});
+
+const NOOP = () => {};
 
 const RouletteScreen = ({ 
   selectedCase, 
@@ -375,7 +423,7 @@ const RouletteScreen = ({
                 key={item.uniqueId} 
                 caseData={selectedCase} 
                 winner={item} 
-                onComplete={() => {}} 
+                onComplete={NOOP} 
              />
            ))}
         </div>
@@ -385,26 +433,32 @@ const RouletteScreen = ({
 
 const QuantitySelector = ({ value, onChange }: { value: number, onChange: (val: number) => void }) => {
   const options = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-  
+  const maxIndex = options.length - 1;
+  const selectedIndex = Math.min(maxIndex, Math.max(0, value - 1));
+
   return (
-    <div className="relative bg-slate-800 rounded-xl p-2 flex justify-between mb-4 overflow-hidden">
-      <div 
-        className="absolute top-1 bottom-1 bg-yellow-500 rounded-lg transition-all duration-300 ease-out shadow-[0_0_15px_rgba(234,179,8,0.5)]"
-        style={{ 
-          left: `${((value - 1) * 10)}%`, 
-          width: '10%' 
-        }}
-      />
-      
-      {options.map((num) => (
-        <button
-          key={num}
-          onClick={() => onChange(num)}
-          className={`relative z-10 flex-1 h-10 flex items-center justify-center font-bold text-sm transition-colors ${value === num ? 'text-black' : 'text-slate-400 hover:text-white'}`}
-        >
-          {num}
-        </button>
-      ))}
+    <div className="relative bg-slate-800 rounded-xl p-2 mb-4 overflow-hidden">
+      <div className="absolute inset-0 p-2 pointer-events-none">
+        <div
+          className="absolute top-1 bottom-1 left-0 bg-yellow-500 rounded-lg transition-transform duration-300 ease-out shadow-[0_0_15px_rgba(234,179,8,0.5)]"
+          style={{
+            width: `calc(100% / ${options.length})`,
+            transform: `translate3d(${selectedIndex * 100}%, 0, 0)`,
+          }}
+        />
+      </div>
+
+      <div className="relative z-10 grid grid-cols-10">
+        {options.map((num) => (
+          <button
+            key={num}
+            onClick={() => onChange(num)}
+            className={`h-10 flex items-center justify-center font-bold text-sm transition-colors ${value === num ? 'text-black' : 'text-slate-400 hover:text-white'}`}
+          >
+            {num}
+          </button>
+        ))}
+      </div>
     </div>
   );
 };

@@ -57,4 +57,5 @@ export interface PlayerProfile {
   telegram_id?: string;
   telegram_username?: string;
   is_public: boolean;
+  show_profile_link: boolean;
 }

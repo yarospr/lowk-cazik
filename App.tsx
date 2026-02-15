@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r16';
+const BUILD_MARKER = 'v5069015-r17';
 const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || '').trim().replace(/^@/, '');
 const OFFER_ID_PREFIX = 'offer_';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
@@ -324,6 +324,7 @@ type PlayerDbRow = {
   inventory_json?: InventoryItem[] | string | null;
   display_name?: string | null;
   is_public?: boolean | null;
+  show_profile_link?: boolean | null;
 };
 
 type OfferVisibility = 'PUBLIC' | 'LINK_ONLY';
@@ -355,7 +356,7 @@ type MarketOffer = {
   sold_at?: string;
   seller_name: string;
   seller_username?: string;
-  seller_is_public: boolean;
+  seller_show_profile_link: boolean;
 };
 
 declare global {
@@ -458,6 +459,7 @@ const mapOfferRow = (
   const seller = sellersById.get(seller_telegram_id);
   const seller_name = seller?.display_name || seller?.first_name || seller?.username || 'Player';
   const seller_username = seller?.username || undefined;
+  const seller_show_profile_link = Boolean(seller?.show_profile_link ?? seller?.is_public);
 
   return {
     offer_id,
@@ -472,7 +474,7 @@ const mapOfferRow = (
     sold_at: typeof row.sold_at === 'string' ? row.sold_at : undefined,
     seller_name,
     seller_username,
-    seller_is_public: Boolean(seller?.is_public),
+    seller_show_profile_link,
   };
 };
 
@@ -489,6 +491,7 @@ const mapDbRowToProfile = (row: PlayerDbRow): PlayerProfile => {
     telegram_id: id,
     telegram_username: row.username || undefined,
     is_public: Boolean(row.is_public),
+    show_profile_link: Boolean(row.show_profile_link ?? row.is_public),
   };
 };
 
@@ -779,6 +782,7 @@ export default function App() {
   // Registration / Settings form state
   const [inputName, setInputName] = useState('');
   const [inputIsPublic, setInputIsPublic] = useState(false);
+  const [inputShowProfileLink, setInputShowProfileLink] = useState(false);
 
   // GAME STATE
   const [balance, setBalance] = useState<number>(INITIAL_BALANCE);
@@ -968,6 +972,7 @@ export default function App() {
           inventory_json: [],
           display_name: '',
           is_public: isTg,
+          show_profile_link: isTg,
         };
 
         const { data: inserted, error: insertError } = await supabase
@@ -986,11 +991,13 @@ export default function App() {
             telegram_id: isTg ? userId : undefined,
             telegram_username: tgUser?.username,
             is_public: false,
+            show_profile_link: false,
           });
           setBalance(INITIAL_BALANCE);
           setInventory([]);
           setInputName(tgUser?.first_name || '');
           setInputIsPublic(isTg);
+          setInputShowProfileLink(isTg);
           setShowWelcomeModal(true);
           setIsLoaded(true);
           return;
@@ -1012,6 +1019,7 @@ export default function App() {
       const registeredName = (row.display_name || '').trim();
       setInputName(registeredName || tgUser?.first_name || profile.name || '');
       setInputIsPublic(isTg ? (row.is_public ?? true) : Boolean(row.is_public));
+      setInputShowProfileLink(isTg ? (row.show_profile_link ?? row.is_public ?? true) : Boolean(row.show_profile_link));
       setShowWelcomeModal(!registeredName);
       setIsLoaded(true);
     };
@@ -1168,6 +1176,7 @@ export default function App() {
       ...playerProfile,
       name: inputName.trim(),
       is_public: inputIsPublic,
+      show_profile_link: inputShowProfileLink,
     };
 
     const { error } = await supabase
@@ -1175,6 +1184,7 @@ export default function App() {
       .update({
         display_name: inputName.trim(),
         is_public: inputIsPublic,
+        show_profile_link: inputShowProfileLink,
       })
       .eq('telegram_id', playerProfile.id);
 
@@ -1198,14 +1208,16 @@ export default function App() {
      const updated = {
        ...playerProfile,
        name: inputName.trim(),
-       is_public: inputIsPublic
+       is_public: inputIsPublic,
+       show_profile_link: inputShowProfileLink,
      };
 
      const { error } = await supabase
         .from('players')
          .update({
           display_name: inputName.trim(),
-          is_public: inputIsPublic
+          is_public: inputIsPublic,
+          show_profile_link: inputShowProfileLink,
          })
         .eq('telegram_id', playerProfile.id);
       
@@ -1286,7 +1298,7 @@ export default function App() {
     if (sellerIds.length > 0) {
       const { data: sellerRows, error: sellerError } = await supabase
         .from('players')
-        .select('telegram_id, username, first_name, display_name, is_public')
+        .select('telegram_id, username, first_name, display_name, is_public, show_profile_link')
         .in('telegram_id', sellerIds);
 
       if (!sellerError && sellerRows) {
@@ -1324,7 +1336,7 @@ export default function App() {
     if (sellerId) {
       const { data: seller, error: sellerError } = await supabase
         .from('players')
-        .select('telegram_id, username, first_name, display_name, is_public')
+        .select('telegram_id, username, first_name, display_name, is_public, show_profile_link')
         .eq('telegram_id', sellerId)
         .maybeSingle();
       if (!sellerError && seller) {
@@ -1904,6 +1916,18 @@ export default function App() {
                   Показывать мой профиль в таблице лидеров
                 </label>
              </div>
+             <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
+                <input
+                  type="checkbox"
+                  id="showProfileLink"
+                  checked={inputShowProfileLink}
+                  onChange={(e) => setInputShowProfileLink(e.target.checked)}
+                  className="mt-1 w-5 h-5 accent-yellow-500"
+                />
+                <label htmlFor="showProfileLink" className="text-sm text-slate-300">
+                  Отображать ссылку на мой профиль
+                </label>
+             </div>
 
              <Button onClick={handleRegister} className="w-full py-4 mt-2">
                Начать игру
@@ -1947,6 +1971,18 @@ export default function App() {
                   Показывать мой профиль в таблице лидеров
                 </label>
              </div>
+             <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
+                <input
+                  type="checkbox"
+                  id="showProfileLinkEdit"
+                  checked={inputShowProfileLink}
+                  onChange={(e) => setInputShowProfileLink(e.target.checked)}
+                  className="mt-1 w-5 h-5 accent-yellow-500"
+                />
+                <label htmlFor="showProfileLinkEdit" className="text-sm text-slate-300">
+                  Отображать ссылку на мой профиль
+                </label>
+             </div>
 
              <Button onClick={handleUpdateSettings} className="w-full py-4 mt-2">
                Сохранить
@@ -1983,7 +2019,7 @@ export default function App() {
                              </div>
                              <div>
                                 <div className="font-bold text-white flex items-center gap-2">
-                                   {p.is_public && p.telegram_username ? (
+                                   {p.show_profile_link && p.telegram_username ? (
                                       <a href={`https://t.me/${p.telegram_username}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 hover:text-blue-400 transition-colors">
                                          {p.name} <ExternalLink className="w-3 h-3" />
                                       </a>
@@ -2137,7 +2173,7 @@ export default function App() {
                     {offer.description}
                   </div>
                   <div className="text-[11px] text-slate-500 mt-2">
-                    {offer.seller_is_public && offer.seller_username ? (
+                    {offer.seller_show_profile_link && offer.seller_username ? (
                       <a href={`https://t.me/${offer.seller_username}`} target="_blank" rel="noopener noreferrer" className="hover:text-blue-400">
                         {`Продавец: ${offer.seller_name} (@${offer.seller_username})`}
                       </a>
@@ -2192,7 +2228,7 @@ export default function App() {
             </div>
 
             <div className="mt-4 text-xs text-slate-500">
-              {offer.seller_is_public && offer.seller_username ? (
+              {offer.seller_show_profile_link && offer.seller_username ? (
                 <a href={`https://t.me/${offer.seller_username}`} target="_blank" rel="noopener noreferrer" className="hover:text-blue-400">
                   {`Продавец: ${offer.seller_name} (@${offer.seller_username})`}
                 </a>
@@ -3154,6 +3190,7 @@ export default function App() {
                onClick={() => {
                  setInputName(playerProfile?.name || '');
                  setInputIsPublic(playerProfile?.is_public || false);
+                 setInputShowProfileLink(playerProfile?.show_profile_link || false);
                  setShowSettingsModal(true);
                }}
                className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 text-slate-300"

@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r9';
+const BUILD_MARKER = 'v5069015-r10';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -228,28 +228,23 @@ const simulateBusinessCatchup = (state: BusinessState, now: number): { nextState
     return { nextState: state, rewards: [] };
   }
 
-  const rewards: BusinessRewardNotice[] = [];
-  let current = { ...state };
+  const reward = createBusinessReward(state.investment, state.nextDropAt);
+  const rewardPrice = getItemPrice(reward.item);
+  const earnedTotal = state.earnedTotal + rewardPrice;
+  const isCompleted = earnedTotal > state.targetTotal;
 
-  while (current.active && !current.pendingReward && current.nextDropAt !== null && current.nextDropAt <= now) {
-    const reward = createBusinessReward(current.investment, current.nextDropAt);
-    const rewardPrice = getItemPrice(reward.item);
-    const earnedTotal = current.earnedTotal + rewardPrice;
-    const isCompleted = earnedTotal > current.targetTotal;
-
-    rewards.push(reward);
-    current = {
-      ...current,
+  return {
+    nextState: {
+      ...state,
       earnedTotal,
-      rewardsCount: current.rewardsCount + 1,
+      rewardsCount: state.rewardsCount + 1,
       active: !isCompleted,
-      pendingReward: null,
-      completedAt: isCompleted ? reward.createdAt : current.completedAt,
-      nextDropAt: isCompleted ? null : current.nextDropAt + BUSINESS_TICK_MS,
-    };
-  }
-
-  return { nextState: current, rewards };
+      pendingReward: isCompleted ? null : reward,
+      completedAt: isCompleted ? reward.createdAt : state.completedAt,
+      nextDropAt: null,
+    },
+    rewards: [reward],
+  };
 };
 
 const getRandomItemFromCase = (c: Case): CaseItemDrop => {
@@ -694,7 +689,7 @@ export default function App() {
   const [slotsSpinState, setSlotsSpinState] = useState<'IDLE' | 'PRE_SPIN' | 'SPINNING' | 'FINISHED'>('IDLE');
   const [slotsWinItem, setSlotsWinItem] = useState<BaseItem | null>(null);
   const [slotsReelStrips, setSlotsReelStrips] = useState<{item: BaseItem, payout: number}[][]>([[], [], []]);
-  const sellAllResetTimerRef = useRef<number | null>(null);
+  const sellAllInFlightRef = useRef(false);
 
   // Business Game State
   const [businessState, setBusinessState] = useState<BusinessState>(EMPTY_BUSINESS_STATE);
@@ -746,14 +741,6 @@ export default function App() {
       return changed ? next : prev;
     });
   }, [inventoryValueById]);
-
-  useEffect(() => {
-    return () => {
-      if (sellAllResetTimerRef.current !== null) {
-        window.clearTimeout(sellAllResetTimerRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     businessStateRef.current = businessState;
@@ -845,7 +832,7 @@ export default function App() {
     initPlayer();
   }, []);
 
-  const grantBusinessReward = useCallback((mode: 'manual' | 'auto', dropAt = Date.now(), nextDelayMs = BUSINESS_TICK_MS) => {
+  const grantBusinessReward = useCallback((dropAt = Date.now()) => {
     let reward: BusinessRewardNotice | null = null;
     let shouldQueueToast = false;
 
@@ -856,20 +843,21 @@ export default function App() {
       const rewardPrice = getItemPrice(reward.item);
       const earnedTotal = prev.earnedTotal + rewardPrice;
       const isCompleted = earnedTotal > prev.targetTotal;
-      shouldQueueToast = mode === 'auto';
+      shouldQueueToast = screenRef.current !== AppScreen.BUSINESS_MENU;
 
       return {
         ...prev,
         earnedTotal,
         rewardsCount: prev.rewardsCount + 1,
         active: !isCompleted,
-        pendingReward: !isCompleted && mode === 'manual' ? reward : null,
+        pendingReward: !isCompleted ? reward : null,
         completedAt: isCompleted ? dropAt : prev.completedAt,
-        nextDropAt: isCompleted ? null : mode === 'manual' ? null : dropAt + nextDelayMs,
+        nextDropAt: null,
       };
     });
 
     if (reward) {
+      // Reward item is committed to inventory immediately at drop time.
       setInventory(prev => [reward.item, ...prev]);
       if (shouldQueueToast) {
         setBusinessToastQueue(prev => [...prev, reward!]);
@@ -886,7 +874,9 @@ export default function App() {
     setBusinessState(nextState);
     const generatedItems = rewards.map(entry => entry.item).reverse();
     setInventory(prev => [...generatedItems, ...prev]);
-    setBusinessToastQueue(prev => [...prev, ...rewards]);
+    if (screenRef.current !== AppScreen.BUSINESS_MENU) {
+      setBusinessToastQueue(prev => [...prev, ...rewards]);
+    }
   }, []);
 
   useEffect(() => {
@@ -916,7 +906,9 @@ export default function App() {
     if (rewards.length > 0) {
       const generatedItems = rewards.map(entry => entry.item).reverse();
       setInventory(prev => [...generatedItems, ...prev]);
-      setBusinessToastQueue(prev => [...prev, ...rewards]);
+      if (screenRef.current !== AppScreen.BUSINESS_MENU) {
+        setBusinessToastQueue(prev => [...prev, ...rewards]);
+      }
     }
     setIsBusinessHydrated(true);
   }, [playerProfile?.id]);
@@ -928,6 +920,17 @@ export default function App() {
   }, [businessState, playerProfile?.id, isBusinessHydrated]);
 
   useEffect(() => {
+    const pending = businessState.pendingReward;
+    if (!pending) return;
+
+    setInventory(prev => {
+      const exists = prev.some(item => item.uniqueId === pending.item.uniqueId);
+      if (exists) return prev;
+      return [pending.item, ...prev];
+    });
+  }, [businessState.pendingReward]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
       setBusinessClockMs(now);
@@ -936,29 +939,11 @@ export default function App() {
       if (!snapshot.active || snapshot.pendingReward || snapshot.nextDropAt === null) return;
       if (snapshot.nextDropAt > now) return;
 
-      const mode = screenRef.current === AppScreen.BUSINESS_MENU ? 'manual' : 'auto';
-      const nextDelay = mode === 'manual' ? BUSINESS_TICK_MS : BUSINESS_TICK_MS + BUSINESS_TOAST_MS;
-      grantBusinessReward(mode, now, nextDelay);
+      grantBusinessReward(now);
     }, 1000);
 
     return () => window.clearInterval(timer);
   }, [grantBusinessReward]);
-
-  useEffect(() => {
-    if (!businessState.active || !businessState.pendingReward) return;
-    if (screen === AppScreen.BUSINESS_MENU) return;
-
-    const pending = businessState.pendingReward;
-    setBusinessToastQueue(prev => [...prev, pending]);
-    setBusinessState(prev => {
-      if (!prev.active || !prev.pendingReward) return prev;
-      return {
-        ...prev,
-        pendingReward: null,
-        nextDropAt: Date.now() + BUSINESS_TICK_MS + BUSINESS_TOAST_MS,
-      };
-    });
-  }, [businessState.active, businessState.pendingReward, screen]);
 
   useEffect(() => {
     if (activeBusinessToast || businessToastQueue.length === 0) return;
@@ -1356,35 +1341,31 @@ export default function App() {
   };
 
   const handleSellAll = () => {
-    if (isSellAllPending) return;
-    if (inventory.length === 0) {
+    if (sellAllInFlightRef.current) return;
+
+    const snapshot = inventory;
+    if (snapshot.length === 0) {
       setShowSellAllConfirm(false);
       return;
     }
 
+    sellAllInFlightRef.current = true;
     setIsSellAllPending(true);
-    setSelectedInventoryIds(new Set());
     setShowSellAllConfirm(false);
+    setSelectedInventoryIds(new Set());
 
-    const memoTotal = inventoryValueById.total;
-    const totalValue = memoTotal > 0 ? memoTotal : sumItemPrices(inventory);
-
-    try {
-      setInventory([]);
-      setBalance(prev => prev + totalValue);
-    } catch (error) {
-      console.error('Failed to sell all inventory items', error);
-      setIsSellAllPending(false);
-      return;
+    let totalValue = 0;
+    for (const item of snapshot) {
+      totalValue += getItemPrice(item);
     }
 
-    if (sellAllResetTimerRef.current !== null) {
-      window.clearTimeout(sellAllResetTimerRef.current);
-    }
-    sellAllResetTimerRef.current = window.setTimeout(() => {
+    setInventory([]);
+    setBalance(prev => prev + totalValue);
+
+    Promise.resolve().then(() => {
       setIsSellAllPending(false);
-      sellAllResetTimerRef.current = null;
-    }, 100);
+      sellAllInFlightRef.current = false;
+    });
   };
 
   const handleStartBusiness = () => {
@@ -1395,7 +1376,7 @@ export default function App() {
       return;
     }
 
-    const targetMultiplier = 0.8 + Math.random() * 0.5;
+    const targetMultiplier = 0.8 + Math.random() * 0.6;
     const targetTotal = Math.max(1, Math.round(investment * targetMultiplier));
     const now = Date.now();
 
@@ -1684,8 +1665,6 @@ export default function App() {
                 disabled={!canStart}
               />
             </div>
-            <div className="text-xs text-slate-500 mt-2">{'\u0411\u0438\u0437\u043d\u0435\u0441 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u0434\u043e \u0434\u043e\u0441\u0442\u0438\u0436\u0435\u043d\u0438\u044f \u0432\u043d\u0443\u0442\u0440\u0435\u043d\u043d\u0435\u0439 \u0446\u0435\u043b\u0438 \u0434\u043e\u0445\u043e\u0434\u0430.'}</div>
-
             <div className="grid grid-cols-4 gap-2 mt-3">
               {[1000, 5000, 10000, 50000].map((amount) => (
                 <button

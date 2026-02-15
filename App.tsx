@@ -6,13 +6,44 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r7';
+const BUILD_MARKER = 'v5069015-r8';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
 const ITEM_NAME_KEY = '\u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435';
 const ITEM_PRICE_KEY = '\u0446\u0435\u043d\u0430';
 const ITEM_RARITY_KEY = '\u0440\u0435\u0434\u043a\u043e\u0441\u0442\u044c';
+const BUSINESS_TICK_MS = 60_000;
+const BUSINESS_TOAST_MS = 1200;
+
+type BusinessRewardNotice = {
+  item: InventoryItem;
+  percent: number;
+  targetPrice: number;
+  createdAt: number;
+};
+
+type BusinessState = {
+  active: boolean;
+  investment: number;
+  targetTotal: number;
+  earnedTotal: number;
+  nextDropAt: number | null;
+  pendingReward: BusinessRewardNotice | null;
+  completedAt: number | null;
+  rewardsCount: number;
+};
+
+const EMPTY_BUSINESS_STATE: BusinessState = {
+  active: false,
+  investment: 0,
+  targetTotal: 0,
+  earnedTotal: 0,
+  nextDropAt: null,
+  pendingReward: null,
+  completedAt: null,
+  rewardsCount: 0,
+};
 
 type CaseSampler = {
   cumulative: number[];
@@ -121,6 +152,104 @@ const generateUUID = () => {
 
 const generateSerial = () => {
   return Math.floor(Math.random() * 10000) + 1;
+};
+
+const formatSecondsLeft = (secondsLeft: number): string => {
+  const safe = Math.max(0, secondsLeft);
+  const mm = Math.floor(safe / 60).toString().padStart(2, '0');
+  const ss = (safe % 60).toString().padStart(2, '0');
+  return `${mm}:${ss}`;
+};
+
+const getBusinessStorageKey = (playerId: string): string => {
+  return `ccc_business_state_${playerId}`;
+};
+
+const normalizeBusinessState = (raw: unknown): BusinessState => {
+  if (!raw || typeof raw !== 'object') return EMPTY_BUSINESS_STATE;
+  const rec = raw as Record<string, unknown>;
+  const pendingRaw = rec.pendingReward;
+  let pendingReward: BusinessRewardNotice | null = null;
+  if (pendingRaw && typeof pendingRaw === 'object') {
+    const pendingRec = pendingRaw as Record<string, unknown>;
+    const itemRaw = pendingRec.item;
+    if (itemRaw && typeof itemRaw === 'object') {
+      pendingReward = {
+        item: itemRaw as InventoryItem,
+        percent: Math.max(1, Math.min(20, Math.floor(toSafeNumber(pendingRec.percent) || 1))),
+        targetPrice: Math.max(0, toSafeNumber(pendingRec.targetPrice)),
+        createdAt: toSafeNumber(pendingRec.createdAt) || Date.now(),
+      };
+    }
+  }
+
+  const active = Boolean(rec.active);
+  const investment = Math.max(0, Math.floor(toSafeNumber(rec.investment)));
+  const targetTotal = Math.max(0, toSafeNumber(rec.targetTotal));
+  const earnedTotal = Math.max(0, toSafeNumber(rec.earnedTotal));
+  const nextDropAtRaw = toSafeNumber(rec.nextDropAt);
+  const completedAtRaw = toSafeNumber(rec.completedAt);
+  const rewardsCount = Math.max(0, Math.floor(toSafeNumber(rec.rewardsCount)));
+
+  return {
+    active,
+    investment,
+    targetTotal,
+    earnedTotal,
+    nextDropAt: nextDropAtRaw > 0 ? nextDropAtRaw : null,
+    pendingReward,
+    completedAt: completedAtRaw > 0 ? completedAtRaw : null,
+    rewardsCount,
+  };
+};
+
+const createBusinessReward = (investment: number, obtainedAt: number): BusinessRewardNotice => {
+  const percent = Math.floor(Math.random() * 20) + 1;
+  const targetPrice = Math.max(1, Math.floor((investment * percent) / 100));
+  const closest = findClosestItemByPrice(targetPrice);
+
+  const item: InventoryItem = {
+    ...closest,
+    uniqueId: generateUUID(),
+    serial: generateSerial(),
+    obtainedAt,
+  };
+
+  return {
+    item,
+    percent,
+    targetPrice,
+    createdAt: obtainedAt,
+  };
+};
+
+const simulateBusinessCatchup = (state: BusinessState, now: number): { nextState: BusinessState; rewards: BusinessRewardNotice[] } => {
+  if (!state.active || state.pendingReward || state.nextDropAt === null || state.nextDropAt > now) {
+    return { nextState: state, rewards: [] };
+  }
+
+  const rewards: BusinessRewardNotice[] = [];
+  let current = { ...state };
+
+  while (current.active && !current.pendingReward && current.nextDropAt !== null && current.nextDropAt <= now) {
+    const reward = createBusinessReward(current.investment, current.nextDropAt);
+    const rewardPrice = getItemPrice(reward.item);
+    const earnedTotal = current.earnedTotal + rewardPrice;
+    const isCompleted = earnedTotal > current.targetTotal;
+
+    rewards.push(reward);
+    current = {
+      ...current,
+      earnedTotal,
+      rewardsCount: current.rewardsCount + 1,
+      active: !isCompleted,
+      pendingReward: null,
+      completedAt: isCompleted ? reward.createdAt : current.completedAt,
+      nextDropAt: isCompleted ? null : current.nextDropAt + BUSINESS_TICK_MS,
+    };
+  }
+
+  return { nextState: current, rewards };
 };
 
 const getRandomItemFromCase = (c: Case): CaseItemDrop => {
@@ -304,6 +433,7 @@ const BottomNav = ({ activeTab, onTabChange }: { activeTab: string, onTabChange:
       >
         <Banknote className="w-6 h-6" />
       </button>
+
     </div>
   );
 };
@@ -566,6 +696,21 @@ export default function App() {
   const [slotsReelStrips, setSlotsReelStrips] = useState<{item: BaseItem, payout: number}[][]>([[], [], []]);
   const sellAllResetTimerRef = useRef<number | null>(null);
 
+  // Business Game State
+  const [businessState, setBusinessState] = useState<BusinessState>(EMPTY_BUSINESS_STATE);
+  const [businessInvestmentInput, setBusinessInvestmentInput] = useState<string>('1000');
+  const [businessClockMs, setBusinessClockMs] = useState<number>(Date.now());
+  const [isBusinessHydrated, setIsBusinessHydrated] = useState<boolean>(false);
+  const [businessToastQueue, setBusinessToastQueue] = useState<BusinessRewardNotice[]>([]);
+  const [activeBusinessToast, setActiveBusinessToast] = useState<BusinessRewardNotice | null>(null);
+  const businessStateRef = useRef<BusinessState>(EMPTY_BUSINESS_STATE);
+  const screenRef = useRef<AppScreen>(AppScreen.GAMES_MENU);
+
+  const businessSecondsLeft = useMemo(() => {
+    if (!businessState.active || businessState.pendingReward || businessState.nextDropAt === null) return 0;
+    return Math.max(0, Math.ceil((businessState.nextDropAt - businessClockMs) / 1000));
+  }, [businessState, businessClockMs]);
+
   const inventoryValueById = useMemo(() => {
     const valueById = new Map<string, number>();
     let total = 0;
@@ -609,6 +754,14 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    businessStateRef.current = businessState;
+  }, [businessState]);
+
+  useEffect(() => {
+    screenRef.current = screen;
+  }, [screen]);
 
   // --- INITIALIZATION ---
   useEffect(() => {
@@ -691,6 +844,150 @@ export default function App() {
 
     initPlayer();
   }, []);
+
+  const grantBusinessReward = useCallback((mode: 'manual' | 'auto', dropAt = Date.now(), nextDelayMs = BUSINESS_TICK_MS) => {
+    let reward: BusinessRewardNotice | null = null;
+    let shouldQueueToast = false;
+
+    setBusinessState(prev => {
+      if (!prev.active || prev.pendingReward || prev.nextDropAt === null) return prev;
+
+      reward = createBusinessReward(prev.investment, dropAt);
+      const rewardPrice = getItemPrice(reward.item);
+      const earnedTotal = prev.earnedTotal + rewardPrice;
+      const isCompleted = earnedTotal > prev.targetTotal;
+      shouldQueueToast = mode === 'auto';
+
+      return {
+        ...prev,
+        earnedTotal,
+        rewardsCount: prev.rewardsCount + 1,
+        active: !isCompleted,
+        pendingReward: !isCompleted && mode === 'manual' ? reward : null,
+        completedAt: isCompleted ? dropAt : prev.completedAt,
+        nextDropAt: isCompleted ? null : mode === 'manual' ? null : dropAt + nextDelayMs,
+      };
+    });
+
+    if (reward) {
+      setInventory(prev => [reward.item, ...prev]);
+      if (shouldQueueToast) {
+        setBusinessToastQueue(prev => [...prev, reward!]);
+      }
+    }
+  }, []);
+
+  const runBusinessCatchup = useCallback(() => {
+    const now = Date.now();
+    const snapshot = businessStateRef.current;
+    const { nextState, rewards } = simulateBusinessCatchup(snapshot, now);
+    if (rewards.length === 0) return;
+
+    setBusinessState(nextState);
+    const generatedItems = rewards.map(entry => entry.item).reverse();
+    setInventory(prev => [...generatedItems, ...prev]);
+    setBusinessToastQueue(prev => [...prev, ...rewards]);
+  }, []);
+
+  useEffect(() => {
+    if (!playerProfile?.id) return;
+    setIsBusinessHydrated(false);
+
+    const storageKey = getBusinessStorageKey(playerProfile.id);
+    let parsed = EMPTY_BUSINESS_STATE;
+    const raw = localStorage.getItem(storageKey);
+    if (raw) {
+      try {
+        parsed = normalizeBusinessState(JSON.parse(raw));
+      } catch {
+        parsed = EMPTY_BUSINESS_STATE;
+      }
+    }
+
+    const now = Date.now();
+    const { nextState, rewards } = simulateBusinessCatchup(parsed, now);
+    setBusinessState(nextState);
+    businessStateRef.current = nextState;
+    setBusinessClockMs(now);
+    if (parsed.investment > 0) {
+      setBusinessInvestmentInput(String(parsed.investment));
+    }
+
+    if (rewards.length > 0) {
+      const generatedItems = rewards.map(entry => entry.item).reverse();
+      setInventory(prev => [...generatedItems, ...prev]);
+      setBusinessToastQueue(prev => [...prev, ...rewards]);
+    }
+    setIsBusinessHydrated(true);
+  }, [playerProfile?.id]);
+
+  useEffect(() => {
+    if (!playerProfile?.id || !isBusinessHydrated) return;
+    const storageKey = getBusinessStorageKey(playerProfile.id);
+    localStorage.setItem(storageKey, JSON.stringify(businessState));
+  }, [businessState, playerProfile?.id, isBusinessHydrated]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setBusinessClockMs(now);
+
+      const snapshot = businessStateRef.current;
+      if (!snapshot.active || snapshot.pendingReward || snapshot.nextDropAt === null) return;
+      if (snapshot.nextDropAt > now) return;
+
+      const mode = screenRef.current === AppScreen.BUSINESS_MENU ? 'manual' : 'auto';
+      const nextDelay = mode === 'manual' ? BUSINESS_TICK_MS : BUSINESS_TICK_MS + BUSINESS_TOAST_MS;
+      grantBusinessReward(mode, now, nextDelay);
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [grantBusinessReward]);
+
+  useEffect(() => {
+    if (!businessState.active || !businessState.pendingReward) return;
+    if (screen === AppScreen.BUSINESS_MENU) return;
+
+    const pending = businessState.pendingReward;
+    setBusinessToastQueue(prev => [...prev, pending]);
+    setBusinessState(prev => {
+      if (!prev.active || !prev.pendingReward) return prev;
+      return {
+        ...prev,
+        pendingReward: null,
+        nextDropAt: Date.now() + BUSINESS_TICK_MS + BUSINESS_TOAST_MS,
+      };
+    });
+  }, [businessState.active, businessState.pendingReward, screen]);
+
+  useEffect(() => {
+    if (activeBusinessToast || businessToastQueue.length === 0) return;
+    const [nextToast, ...rest] = businessToastQueue;
+    setActiveBusinessToast(nextToast);
+    setBusinessToastQueue(rest);
+
+    const timer = window.setTimeout(() => {
+      setActiveBusinessToast(null);
+    }, BUSINESS_TOAST_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [activeBusinessToast, businessToastQueue]);
+
+  useEffect(() => {
+    const onResume = () => {
+      if (document.visibilityState === 'hidden') return;
+      setBusinessClockMs(Date.now());
+      runBusinessCatchup();
+    };
+
+    document.addEventListener('visibilitychange', onResume);
+    window.addEventListener('focus', onResume);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onResume);
+      window.removeEventListener('focus', onResume);
+    };
+  }, [runBusinessCatchup]);
 
   // --- SYNC TO DB ---
   useEffect(() => {
@@ -798,7 +1095,7 @@ export default function App() {
       setActiveTab('leaderboard');
       fetchLeaderboard();
     }
-    else if (screen === AppScreen.GAMES_MENU || screen === AppScreen.CASE_LIST || screen === AppScreen.ROCKET_MENU || screen === AppScreen.UPGRADER_MENU || screen === AppScreen.SLOTS_MENU) setActiveTab('games');
+    else if (screen === AppScreen.GAMES_MENU || screen === AppScreen.CASE_LIST || screen === AppScreen.ROCKET_MENU || screen === AppScreen.UPGRADER_MENU || screen === AppScreen.SLOTS_MENU || screen === AppScreen.BUSINESS_MENU) setActiveTab('games');
   }, [screen]);
 
   const handleTabChange = (tab: string) => {
@@ -1090,6 +1387,50 @@ export default function App() {
     }, 100);
   };
 
+  const handleStartBusiness = () => {
+    if (businessState.active) return;
+    const investment = Math.max(1, Math.floor(toSafeNumber(businessInvestmentInput)));
+    if (balance < investment) {
+      alert('\u041d\u0435\u0434\u043e\u0441\u0442\u0430\u0442\u043e\u0447\u043d\u043e \u0437\u0432\u0435\u0437\u0434 \u0434\u043b\u044f \u0432\u043a\u043b\u0430\u0434\u0430');
+      return;
+    }
+
+    const targetMultiplier = 0.8 + Math.random() * 0.5;
+    const targetTotal = Math.max(1, Math.round(investment * targetMultiplier));
+    const now = Date.now();
+
+    setBalance(prev => prev - investment);
+    setBusinessState({
+      active: true,
+      investment,
+      targetTotal,
+      earnedTotal: 0,
+      nextDropAt: now + BUSINESS_TICK_MS,
+      pendingReward: null,
+      completedAt: null,
+      rewardsCount: 0,
+    });
+    setBusinessClockMs(now);
+    setBusinessInvestmentInput(String(investment));
+  };
+
+  const handleClaimBusinessReward = () => {
+    setBusinessState(prev => {
+      if (!prev.active || !prev.pendingReward) return prev;
+      return {
+        ...prev,
+        pendingReward: null,
+        nextDropAt: Date.now() + BUSINESS_TICK_MS,
+      };
+    });
+  };
+
+  const handleResetBusiness = () => {
+    if (businessState.active) return;
+    setBusinessState(EMPTY_BUSINESS_STATE);
+    setBusinessClockMs(Date.now());
+  };
+
   const toggleInventorySelection = useCallback((id: string) => {
     setSelectedInventoryIds(prev => {
       const next = new Set(prev);
@@ -1300,8 +1641,155 @@ export default function App() {
           <p className="text-slate-400 text-sm">Собери 3 предмета и забери награду!</p>
         </div>
       </button>
+
+      <button
+        onClick={() => setScreen(AppScreen.BUSINESS_MENU)}
+        className="bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-blue-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
+      >
+        <div className="w-20 h-20 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
+          <Banknote className="w-10 h-10 text-blue-400" />
+        </div>
+        <div className="text-left">
+          <h3 className="text-xl font-bold text-white mb-1">{'\u0411\u0438\u0437\u043d\u0435\u0441'}</h3>
+          <p className="text-slate-400 text-sm">{'\u0412\u043b\u043e\u0436\u0438\u0442\u0435 \u0437\u0432\u0435\u0437\u0434\u044b \u0438 \u043f\u043e\u043b\u0443\u0447\u0430\u0439\u0442\u0435 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u044b \u043a\u0430\u0436\u0434\u0443\u044e \u043c\u0438\u043d\u0443\u0442\u0443.'}</p>
+        </div>
+      </button>
     </div>
   );
+
+  const renderBusinessMenu = () => {
+    const canStart = !businessState.active;
+    const pendingReward = businessState.pendingReward;
+    const progressPercent = businessState.targetTotal > 0
+      ? Math.min(100, (businessState.earnedTotal / businessState.targetTotal) * 100)
+      : 0;
+
+    return (
+      <div className="flex flex-col h-full bg-slate-950">
+        <div className="p-4 flex items-center gap-2 bg-slate-950 sticky top-0 z-10 border-b border-slate-800">
+          <button onClick={() => setScreen(AppScreen.GAMES_MENU)} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800">
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <h2 className="text-xl font-bold text-white">{'\u0411\u0438\u0437\u043d\u0435\u0441'}</h2>
+        </div>
+
+        <div className="p-4 pb-24 overflow-y-auto custom-scrollbar space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500 font-bold mb-2">{'\u0412\u043a\u043b\u0430\u0434'}</div>
+            <div className="flex items-center gap-2 bg-slate-950 p-3 rounded-xl border border-slate-800 focus-within:border-yellow-500">
+              <Star className="w-5 h-5 text-yellow-500 fill-yellow-500" />
+              <input
+                type="number"
+                min={1}
+                value={businessInvestmentInput}
+                onChange={(e) => setBusinessInvestmentInput(e.target.value)}
+                className="bg-transparent text-white font-mono text-xl outline-none w-full"
+                disabled={!canStart}
+              />
+            </div>
+            <div className="text-xs text-slate-500 mt-2">{'\u0426\u0435\u043b\u044c \u0431\u0438\u0437\u043d\u0435\u0441\u0430 \u0432\u044b\u0431\u0438\u0440\u0430\u0435\u0442\u0441\u044f \u0441\u043b\u0443\u0447\u0430\u0439\u043d\u043e \u043e\u0442 0.8x \u0434\u043e 1.3x \u0432\u043a\u043b\u0430\u0434\u0430.'}</div>
+
+            <div className="grid grid-cols-4 gap-2 mt-3">
+              {[1000, 5000, 10000, 50000].map((amount) => (
+                <button
+                  key={amount}
+                  onClick={() => setBusinessInvestmentInput(String(amount))}
+                  disabled={!canStart}
+                  className="py-2 bg-slate-800 rounded-lg text-xs font-bold text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                >
+                  {amount >= 1000 ? `${amount / 1000}k` : amount}
+                </button>
+              ))}
+            </div>
+
+            <Button onClick={handleStartBusiness} disabled={!canStart} className="w-full mt-4 py-4 text-lg">
+              {canStart ? '\u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0431\u0438\u0437\u043d\u0435\u0441' : '\u0411\u0438\u0437\u043d\u0435\u0441 \u0443\u0436\u0435 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442'}
+            </Button>
+          </div>
+
+          {(businessState.active || businessState.completedAt) && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs uppercase text-slate-500 font-bold">{'\u0421\u0442\u0430\u0442\u0443\u0441'}</div>
+                  <div className={`font-bold ${businessState.active ? 'text-blue-300' : 'text-yellow-300'}`}>
+                    {businessState.active ? '\u0412 \u0440\u0430\u0431\u043e\u0442\u0435' : '\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043d'}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs uppercase text-slate-500 font-bold">{'\u0426\u0438\u043a\u043b\u043e\u0432'}</div>
+                  <div className="font-bold text-white">{businessState.rewardsCount}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="bg-slate-950 rounded-xl p-2 border border-slate-800">
+                  <div className="text-[10px] uppercase text-slate-500 font-bold">{'\u0412\u043b\u043e\u0436\u0435\u043d\u043e'}</div>
+                  <div className="text-yellow-400 font-bold text-sm">{formatMoney(businessState.investment)}</div>
+                </div>
+                <div className="bg-slate-950 rounded-xl p-2 border border-slate-800">
+                  <div className="text-[10px] uppercase text-slate-500 font-bold">{'\u0417\u0430\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u043e'}</div>
+                  <div className="text-green-400 font-bold text-sm">{formatMoney(businessState.earnedTotal)}</div>
+                </div>
+                <div className="bg-slate-950 rounded-xl p-2 border border-slate-800">
+                  <div className="text-[10px] uppercase text-slate-500 font-bold">{'\u0426\u0435\u043b\u044c'}</div>
+                  <div className="text-blue-400 font-bold text-sm">{formatMoney(businessState.targetTotal)}</div>
+                </div>
+              </div>
+
+              <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                <div className="h-full bg-gradient-to-r from-blue-500 to-green-500" style={{ width: `${progressPercent}%` }} />
+              </div>
+
+              {businessState.active && !pendingReward && (
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-center">
+                  <div className="text-xs uppercase text-slate-500 font-bold">{'\u0414\u043e \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0439 \u0432\u044b\u0434\u0430\u0447\u0438'}</div>
+                  <div className="font-mono text-4xl text-white mt-2">{formatSecondsLeft(businessSecondsLeft)}</div>
+                  <div className="text-xs text-slate-500 mt-1">{'\u041f\u043e\u0441\u043b\u0435 \u0442\u0430\u0439\u043c\u0435\u0440\u0430 \u0432\u044b \u043f\u043e\u043b\u0443\u0447\u0438\u0442\u0435 \u043f\u0440\u0435\u0434\u043c\u0435\u0442.'}</div>
+                </div>
+              )}
+
+              {businessState.active && pendingReward && (
+                <div className="bg-slate-950 border border-yellow-500/40 rounded-xl p-4">
+                  <div className="text-xs uppercase text-slate-500 font-bold mb-3">{'\u041d\u043e\u0432\u044b\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442'}</div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-14 h-14 rounded-xl bg-slate-900 border border-slate-700 flex items-center justify-center text-3xl">
+                      {pendingReward.item.emg}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-white text-sm truncate">{getItemName(pendingReward.item)}</div>
+                      <div className="text-xs text-slate-400">#{pendingReward.item.serial.toString().padStart(4, '0')}</div>
+                      <div className="text-xs text-yellow-400 mt-1 flex items-center gap-1">
+                        <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(getItemPrice(pendingReward.item))}
+                      </div>
+                    </div>
+                  </div>
+                  <Button onClick={handleClaimBusinessReward} className="w-full mt-4 py-3">
+                    {'\u0417\u0430\u0431\u0440\u0430\u0442\u044c \u0438 \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0442\u0430\u0439\u043c\u0435\u0440'}
+                  </Button>
+                </div>
+              )}
+
+              {!businessState.active && businessState.completedAt && (
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4">
+                  <div className="text-sm font-bold text-yellow-300 mb-2">{'\u0411\u0438\u0437\u043d\u0435\u0441 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d'}</div>
+                  <div className="text-sm text-slate-300">
+                    {'\u0412\u043b\u043e\u0436\u0435\u043d\u043e:'} <span className="font-bold text-white">{formatMoney(businessState.investment)}</span>
+                  </div>
+                  <div className="text-sm text-slate-300">
+                    {'\u0417\u0430\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u043e:'} <span className="font-bold text-green-400">{formatMoney(businessState.earnedTotal)}</span>
+                  </div>
+                  <Button onClick={handleResetBusiness} variant="secondary" className="w-full mt-4 py-3">
+                    {'\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043d\u043e\u0432\u044b\u0439 \u0431\u0438\u0437\u043d\u0435\u0441'}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   const renderRocketMenu = () => (
     <div className="flex flex-col h-full">
@@ -2111,12 +2599,32 @@ export default function App() {
       
       {showWelcomeModal && renderWelcomeModal()}
       {showSettingsModal && renderSettingsModal()}
+      {activeBusinessToast && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[90] w-[calc(100%-2rem)] max-w-sm">
+          <div className="bg-slate-900/95 backdrop-blur border border-blue-500/30 rounded-2xl p-3 shadow-2xl animate-in slide-in-from-top-2 duration-300">
+            <div className="text-[10px] uppercase text-blue-300 font-bold tracking-wide mb-2">{'\u0411\u0438\u0437\u043d\u0435\u0441: \u043d\u043e\u0432\u044b\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442'}</div>
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-2xl">
+                {activeBusinessToast.item.emg}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-sm text-white truncate">{getItemName(activeBusinessToast.item)}</div>
+                <div className="text-[11px] text-slate-400">#{activeBusinessToast.item.serial.toString().padStart(4, '0')}</div>
+                <div className="text-xs text-yellow-400 mt-1 flex items-center gap-1">
+                  <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(getItemPrice(activeBusinessToast.item))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && (
         <Header balance={balance} />
       )}
 
       {screen === AppScreen.GAMES_MENU && renderGamesMenu()}
+      {screen === AppScreen.BUSINESS_MENU && renderBusinessMenu()}
       {screen === AppScreen.CASE_LIST && renderCaseList()}
       {screen === AppScreen.CASE_DETAIL && renderCaseDetail()}
       

@@ -414,6 +414,7 @@ export default function App() {
   const [selectedInventoryIds, setSelectedInventoryIds] = useState<Set<string>>(new Set());
   
   const [showSellAllConfirm, setShowSellAllConfirm] = useState(false);
+  const [isSellAllPending, setIsSellAllPending] = useState(false);
 
   // Leaderboard
   const [leaderboard, setLeaderboard] = useState<PlayerProfile[]>([]);
@@ -469,8 +470,8 @@ export default function App() {
           first_name: tgUser?.first_name || null,
           balance: INITIAL_BALANCE,
           inventory_json: [],
-          display_name: tgUser?.first_name || '',
-          is_public: false,
+          display_name: '',
+          is_public: isTg,
         };
 
         const { data: inserted, error: insertError } = await supabase
@@ -493,7 +494,7 @@ export default function App() {
           setBalance(INITIAL_BALANCE);
           setInventory([]);
           setInputName(tgUser?.first_name || '');
-          setInputIsPublic(false);
+          setInputIsPublic(isTg);
           setShowWelcomeModal(true);
           setIsLoaded(true);
           return;
@@ -512,9 +513,10 @@ export default function App() {
       setPlayerProfile(profile);
       setBalance(profile.balance);
       setInventory(profile.inventory);
-      setInputName(profile.name || tgUser?.first_name || '');
-      setInputIsPublic(profile.is_public);
-      setShowWelcomeModal(!profile.name.trim());
+      const registeredName = (row.display_name || '').trim();
+      setInputName(registeredName || tgUser?.first_name || profile.name || '');
+      setInputIsPublic(isTg ? (row.is_public ?? true) : Boolean(row.is_public));
+      setShowWelcomeModal(!registeredName);
       setIsLoaded(true);
     };
 
@@ -887,11 +889,23 @@ export default function App() {
   };
 
   const handleSellAll = () => {
-    const totalValue = inventory.reduce((acc, i) => acc + i.С†РµРЅР°, 0);
-    setInventory([]);
-    setBalance(prev => prev + totalValue);
+    if (isSellAllPending) return;
+
+    const inventorySnapshot = inventory;
+    setIsSellAllPending(true);
     setSelectedInventoryIds(new Set());
     setShowSellAllConfirm(false);
+
+    window.setTimeout(() => {
+      let totalValue = 0;
+      for (let i = 0; i < inventorySnapshot.length; i += 1) {
+        totalValue += inventorySnapshot[i].С†РµРЅР°;
+      }
+
+      setInventory([]);
+      setBalance(prev => prev + totalValue);
+      setIsSellAllPending(false);
+    }, 0);
   };
 
   // --- RENDERERS ---
@@ -1105,7 +1119,9 @@ export default function App() {
       </div>
 
       <div className="p-4 pb-24 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
-          {inventory.length === 0 ? (
+          {isSellAllPending ? (
+                <div className="col-span-3 py-20 text-center text-slate-500">Продажа всех предметов...</div>
+            ) : inventory.length === 0 ? (
               <div className="col-span-3 py-20 text-center text-slate-600 flex flex-col items-center">
                   <Box className="w-16 h-16 mb-4 opacity-50" />
                   <p>РРЅРІРµРЅС‚Р°СЂСЊ РїСѓСЃС‚</p>
@@ -1239,7 +1255,9 @@ export default function App() {
       </div>
 
       <div className="p-4 pb-24 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
-          {inventory.length === 0 ? (
+          {isSellAllPending ? (
+                <div className="col-span-3 py-20 text-center text-slate-500">Продажа всех предметов...</div>
+            ) : inventory.length === 0 ? (
               <div className="col-span-3 py-20 text-center text-slate-600 flex flex-col items-center">
                   <Box className="w-16 h-16 mb-4 opacity-50" />
                   <p>РРЅРІРµРЅС‚Р°СЂСЊ РїСѓСЃС‚</p>
@@ -1774,9 +1792,9 @@ export default function App() {
   }
 
   const renderProfile = () => {
-    const sellAmount = inventory.filter(i => selectedInventoryIds.has(i.uniqueId)).reduce((acc, i) => acc + i.С†РµРЅР°, 0);
+    const sellAmount = isSellAllPending ? 0 : inventory.filter(i => selectedInventoryIds.has(i.uniqueId)).reduce((acc, i) => acc + i.С†РµРЅР°, 0);
     const selectedCount = selectedInventoryIds.size;
-    const totalInvValue = inventory.reduce((acc, i) => acc + i.С†РµРЅР°, 0);
+    const totalInvValue = isSellAllPending ? 0 : inventory.reduce((acc, i) => acc + i.С†РµРЅР°, 0);
 
     const toggleSelection = (id: string) => {
       const newSet = new Set(selectedInventoryIds);
@@ -1800,7 +1818,7 @@ export default function App() {
                    </p>
                    <div className="grid grid-cols-2 gap-3 w-full mt-2">
                       <Button onClick={() => setShowSellAllConfirm(false)} variant="secondary" className="w-full">РћС‚РјРµРЅР°</Button>
-                      <Button onClick={handleSellAll} variant="danger" className="w-full">РџСЂРѕРґР°С‚СЊ РІСЃРµ</Button>
+                      <Button onClick={handleSellAll} disabled={isSellAllPending} variant="danger" className="w-full">{isSellAllPending ? 'Продаем...' : 'Продать все'}</Button>
                    </div>
                 </div>
              </div>
@@ -1854,7 +1872,9 @@ export default function App() {
         </div>
 
         <div className="p-4 pb-32 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
-            {inventory.length === 0 ? (
+            {isSellAllPending ? (
+                <div className="col-span-3 py-20 text-center text-slate-500">Продажа всех предметов...</div>
+            ) : inventory.length === 0 ? (
                 <div className="col-span-3 py-20 text-center text-slate-600 flex flex-col items-center">
                     <Box className="w-16 h-16 mb-4 opacity-50" />
                     <p>РРЅРІРµРЅС‚Р°СЂСЊ РїСѓСЃС‚</p>
@@ -1961,3 +1981,8 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+

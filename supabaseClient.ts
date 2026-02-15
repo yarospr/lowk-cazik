@@ -2,11 +2,13 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = (((import.meta as any).env?.VITE_SUPABASE_URL as string) || '').trim();
 const supabaseKey = (((import.meta as any).env?.VITE_SUPABASE_ANON_KEY as string) || '').trim();
-const safeUrl = supabaseUrl || 'https://example.supabase.co';
-const safeKey = supabaseKey || 'public-anon-key';
+const fallbackUrl = 'https://dcjeznstdqvseassrqux.supabase.co';
+const fallbackKey = 'sb_publishable_msAPoWwtGWIMVbiJGgxewA_zifcP2yF';
+const safeUrl = supabaseUrl || fallbackUrl;
+const safeKey = supabaseKey || fallbackKey;
 
 if (!supabaseUrl || !supabaseKey) {
-  console.warn('Supabase env vars are missing: VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY');
+  console.warn('Supabase env vars are missing: using built-in fallback credentials');
 }
 
 export const supabase = createClient(safeUrl, safeKey, {

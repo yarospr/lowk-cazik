@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r17';
+const BUILD_MARKER = 'v5069015-r18';
 const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || '').trim().replace(/^@/, '');
 const OFFER_ID_PREFIX = 'offer_';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
@@ -817,6 +817,7 @@ export default function App() {
   const [isPublishingOffer, setIsPublishingOffer] = useState(false);
   const pendingOfferIdRef = useRef<string | null>(null);
   const didHandleInitialOfferRef = useRef(false);
+  const marketReturnTimerRef = useRef<number | null>(null);
   const initialOfferId = useMemo(() => {
     try {
       const url = new URL(window.location.href);
@@ -923,6 +924,15 @@ export default function App() {
   useEffect(() => {
     pendingOfferIdRef.current = initialOfferId;
   }, [initialOfferId]);
+
+  useEffect(() => {
+    return () => {
+      if (marketReturnTimerRef.current !== null) {
+        window.clearTimeout(marketReturnTimerRef.current);
+        marketReturnTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -1509,6 +1519,15 @@ export default function App() {
 
     await fetchMarketOffers();
     setIsBuyingMarketOffer(false);
+    if (marketReturnTimerRef.current !== null) {
+      window.clearTimeout(marketReturnTimerRef.current);
+    }
+    marketReturnTimerRef.current = window.setTimeout(() => {
+      setSelectedMarketOffer(null);
+      setScreen(AppScreen.MARKET_MENU);
+      setActiveTab('market');
+      marketReturnTimerRef.current = null;
+    }, 1000);
   }, [selectedMarketOffer, playerProfile, balance, fetchMarketOffers]);
 
   useEffect(() => {
@@ -2196,6 +2215,7 @@ export default function App() {
     const offer = selectedMarketOffer;
     const currentUserId = isTelegramUser ? (playerProfile?.telegram_id || playerProfile?.id || '') : '';
     const isOwnOffer = Boolean(currentUserId) && offer.seller_telegram_id === currentUserId;
+    const isBoughtByCurrentUser = offer.status !== 'ACTIVE' && Boolean(currentUserId) && offer.buyer_telegram_id === currentUserId;
     const canBuy = offer.status === 'ACTIVE' && !isOwnOffer && balance >= offer.price;
     const offerLink = buildOfferLink(offer.offer_id);
 
@@ -2248,7 +2268,7 @@ export default function App() {
 
           {offer.status !== 'ACTIVE' ? (
             <Button disabled variant="secondary" className="w-full">
-              {'Товар уже недоступен'}
+              {isBoughtByCurrentUser ? 'Куплено!' : 'Товар уже недоступен'}
             </Button>
           ) : isOwnOffer ? (
             <Button disabled variant="secondary" className="w-full">

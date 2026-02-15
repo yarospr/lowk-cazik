@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r5';
+const BUILD_MARKER = 'v5069015-r6';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -1061,16 +1061,33 @@ export default function App() {
     setShowSellAllConfirm(false);
 
     const totalValue = inventoryValueById.total;
-    window.requestAnimationFrame(() => {
+    const executeSellAll = () => {
       try {
         setInventory([]);
         setBalance(prev => prev + totalValue);
       } catch (error) {
         console.error('Failed to sell all inventory items', error);
       } finally {
-        window.requestAnimationFrame(() => setIsSellAllPending(false));
+        setIsSellAllPending(false);
       }
-    });
+    };
+
+    let completed = false;
+    const runOnce = () => {
+      if (completed) return;
+      completed = true;
+      executeSellAll();
+    };
+
+    const fallbackTimer = window.setTimeout(runOnce, 32);
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => {
+        window.clearTimeout(fallbackTimer);
+        runOnce();
+      });
+    } else {
+      runOnce();
+    }
   };
 
   const toggleInventorySelection = useCallback((id: string) => {

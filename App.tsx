@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r13';
+const BUILD_MARKER = 'v5069015-r14';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -1268,7 +1268,7 @@ export default function App() {
   const openOfferById = useCallback(async (offerId: string) => {
     const offer = await fetchSingleOffer(offerId);
     if (!offer) {
-      alert('Оффер не найден');
+      alert('Товар не найден');
       return false;
     }
     setSelectedMarketOffer(offer);
@@ -1354,12 +1354,17 @@ export default function App() {
 
   const handleBuySelectedOffer = useCallback(async () => {
     if (!selectedMarketOffer || !playerProfile) return;
-    if (selectedMarketOffer.status !== 'ACTIVE') {
-      alert('Оффер уже недоступен');
+    const buyerId = String(playerProfile.telegram_id || playerProfile.id || '');
+    if (!buyerId) {
+      alert('Не удалось определить аккаунт покупателя');
       return;
     }
-    if (selectedMarketOffer.seller_telegram_id === playerProfile.id) {
-      alert('Нельзя купить собственный оффер');
+    if (selectedMarketOffer.status !== 'ACTIVE') {
+      alert('Товар уже недоступен');
+      return;
+    }
+    if (selectedMarketOffer.seller_telegram_id === buyerId) {
+      alert('Нельзя купить собственный товар');
       return;
     }
     if (balance < selectedMarketOffer.price) {
@@ -1374,7 +1379,7 @@ export default function App() {
       .from('market_offers')
       .update({
         status: 'SOLD',
-        buyer_telegram_id: playerProfile.id,
+        buyer_telegram_id: buyerId,
         sold_at: soldAt,
       })
       .eq('offer_id', selectedMarketOffer.offer_id)
@@ -1383,7 +1388,7 @@ export default function App() {
       .maybeSingle();
 
     if (claimError || !claimed) {
-      alert('Оффер уже куплен другим игроком');
+      alert('Товар уже куплен другим игроком');
       setIsBuyingMarketOffer(false);
       await fetchMarketOffers();
       return;
@@ -1415,7 +1420,7 @@ export default function App() {
       return {
         ...prev,
         status: 'SOLD',
-        buyer_telegram_id: playerProfile.id,
+        buyer_telegram_id: buyerId,
         sold_at: soldAt,
       };
     });
@@ -1940,7 +1945,7 @@ export default function App() {
         <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl">
           {createdOfferLink ? (
             <div className="space-y-4">
-              <h3 className="text-lg font-bold text-white">{'Оффер опубликован'}</h3>
+              <h3 className="text-lg font-bold text-white">{'Товар опубликован'}</h3>
               <p className="text-xs text-slate-400 break-all">{createdOfferLink}</p>
               <div className="grid grid-cols-2 gap-2">
                 <Button onClick={() => copyText(createdOfferLink)} className="w-full">
@@ -2079,7 +2084,8 @@ export default function App() {
     if (!selectedMarketOffer) return null;
 
     const offer = selectedMarketOffer;
-    const isOwnOffer = offer.seller_telegram_id === playerProfile?.id;
+    const currentUserId = isTelegramUser ? (playerProfile?.telegram_id || playerProfile?.id || '') : '';
+    const isOwnOffer = Boolean(currentUserId) && offer.seller_telegram_id === currentUserId;
     const canBuy = offer.status === 'ACTIVE' && !isOwnOffer && balance >= offer.price;
     const offerLink = buildOfferLink(offer.offer_id);
 
@@ -2089,7 +2095,7 @@ export default function App() {
           <button onClick={() => setScreen(AppScreen.MARKET_MENU)} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800">
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h2 className="text-xl font-bold text-white">{'Оффер рынка'}</h2>
+          <h2 className="text-xl font-bold text-white">{'Товар на рынке'}</h2>
         </div>
 
         <div className="p-4 pb-24 overflow-y-auto custom-scrollbar space-y-4">
@@ -2123,7 +2129,7 @@ export default function App() {
           </div>
 
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <div className="text-xs uppercase text-slate-500 font-bold mb-2">{'Ссылка на оффер'}</div>
+            <div className="text-xs uppercase text-slate-500 font-bold mb-2">{'Ссылка на товар'}</div>
             <div className="text-xs text-slate-400 break-all">{offerLink}</div>
             <Button onClick={() => copyText(offerLink)} className="w-full mt-3">
               {'Копировать ссылку'}
@@ -2132,11 +2138,11 @@ export default function App() {
 
           {offer.status !== 'ACTIVE' ? (
             <Button disabled variant="secondary" className="w-full">
-              {'Оффер уже недоступен'}
+              {'Товар уже недоступен'}
             </Button>
           ) : isOwnOffer ? (
             <Button disabled variant="secondary" className="w-full">
-              {'Это ваш оффер'}
+              {'Это ваш товар'}
             </Button>
           ) : (
             <Button onClick={handleBuySelectedOffer} disabled={!canBuy || isBuyingMarketOffer} className="w-full py-4 text-lg">

@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r11';
+const BUILD_MARKER = 'v5069015-r12';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -14,7 +14,6 @@ const ITEM_NAME_KEY = '\u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435';
 const ITEM_PRICE_KEY = '\u0446\u0435\u043d\u0430';
 const ITEM_RARITY_KEY = '\u0440\u0435\u0434\u043a\u043e\u0441\u0442\u044c';
 const BUSINESS_TICK_MS = 60_000;
-const BUSINESS_TOAST_MS = 1200;
 
 type BusinessRewardNotice = {
   item: InventoryItem;
@@ -696,10 +695,7 @@ export default function App() {
   const [businessInvestmentInput, setBusinessInvestmentInput] = useState<string>('1000');
   const [businessClockMs, setBusinessClockMs] = useState<number>(Date.now());
   const [isBusinessHydrated, setIsBusinessHydrated] = useState<boolean>(false);
-  const [businessToastQueue, setBusinessToastQueue] = useState<BusinessRewardNotice[]>([]);
-  const [activeBusinessToast, setActiveBusinessToast] = useState<BusinessRewardNotice | null>(null);
   const businessStateRef = useRef<BusinessState>(EMPTY_BUSINESS_STATE);
-  const screenRef = useRef<AppScreen>(AppScreen.GAMES_MENU);
 
   const businessSecondsLeft = useMemo(() => {
     if (!businessState.active || businessState.pendingReward || businessState.nextDropAt === null) return 0;
@@ -745,10 +741,6 @@ export default function App() {
   useEffect(() => {
     businessStateRef.current = businessState;
   }, [businessState]);
-
-  useEffect(() => {
-    screenRef.current = screen;
-  }, [screen]);
 
   // --- INITIALIZATION ---
   useEffect(() => {
@@ -834,7 +826,6 @@ export default function App() {
 
   const grantBusinessReward = useCallback((dropAt = Date.now()) => {
     let reward: BusinessRewardNotice | null = null;
-    let shouldQueueToast = false;
 
     setBusinessState(prev => {
       if (!prev.active || prev.pendingReward || prev.nextDropAt === null) return prev;
@@ -843,7 +834,6 @@ export default function App() {
       const rewardPrice = getItemPrice(reward.item);
       const earnedTotal = prev.earnedTotal + rewardPrice;
       const isCompleted = earnedTotal > prev.targetTotal;
-      shouldQueueToast = screenRef.current !== AppScreen.BUSINESS_MENU;
 
       return {
         ...prev,
@@ -859,9 +849,6 @@ export default function App() {
     if (reward) {
       // Reward item is committed to inventory immediately at drop time.
       setInventory(prev => [reward.item, ...prev]);
-      if (shouldQueueToast) {
-        setBusinessToastQueue(prev => [...prev, reward!]);
-      }
     }
   }, []);
 
@@ -874,9 +861,6 @@ export default function App() {
     setBusinessState(nextState);
     const generatedItems = rewards.map(entry => entry.item).reverse();
     setInventory(prev => [...generatedItems, ...prev]);
-    if (screenRef.current !== AppScreen.BUSINESS_MENU) {
-      setBusinessToastQueue(prev => [...prev, ...rewards]);
-    }
   }, []);
 
   useEffect(() => {
@@ -906,9 +890,6 @@ export default function App() {
     if (rewards.length > 0) {
       const generatedItems = rewards.map(entry => entry.item).reverse();
       setInventory(prev => [...generatedItems, ...prev]);
-      if (screenRef.current !== AppScreen.BUSINESS_MENU) {
-        setBusinessToastQueue(prev => [...prev, ...rewards]);
-      }
     }
     setIsBusinessHydrated(true);
   }, [playerProfile?.id]);
@@ -944,19 +925,6 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [grantBusinessReward]);
-
-  useEffect(() => {
-    if (activeBusinessToast || businessToastQueue.length === 0) return;
-    const [nextToast, ...rest] = businessToastQueue;
-    setActiveBusinessToast(nextToast);
-    setBusinessToastQueue(rest);
-
-    const timer = window.setTimeout(() => {
-      setActiveBusinessToast(null);
-    }, BUSINESS_TOAST_MS);
-
-    return () => window.clearTimeout(timer);
-  }, [activeBusinessToast, businessToastQueue]);
 
   useEffect(() => {
     const onResume = () => {
@@ -2564,25 +2532,6 @@ export default function App() {
       
       {showWelcomeModal && renderWelcomeModal()}
       {showSettingsModal && renderSettingsModal()}
-      {activeBusinessToast && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[90] w-[calc(100%-2rem)] max-w-sm">
-          <div className="bg-slate-900/95 backdrop-blur border border-blue-500/30 rounded-2xl p-3 shadow-2xl animate-in slide-in-from-top-2 duration-300">
-            <div className="text-[10px] uppercase text-blue-300 font-bold tracking-wide mb-2">{'\u0411\u0438\u0437\u043d\u0435\u0441: \u043d\u043e\u0432\u044b\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442'}</div>
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-2xl">
-                {activeBusinessToast.item.emg}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="font-bold text-sm text-white truncate">{getItemName(activeBusinessToast.item)}</div>
-                <div className="text-[11px] text-slate-400">#{activeBusinessToast.item.serial.toString().padStart(4, '0')}</div>
-                <div className="text-xs text-yellow-400 mt-1 flex items-center gap-1">
-                  <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(getItemPrice(activeBusinessToast.item))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && (
         <Header balance={balance} />

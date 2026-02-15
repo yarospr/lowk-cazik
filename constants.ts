@@ -824,7 +824,63 @@ const ITEM_PRICE_BY_ID = new Map<number, number>(
 );
 
 const RARITY_CASE_KEYS = new Set(['epic_case', 'mythic_case', 'legendary_case']);
+const FIXED_PRICE_CASES = new Map<string, number>([
+  ['trash_case', 0],
+  ['hobo_case', 80],
+]);
 const TARGET_RTPS = [1.0, 0.95, 1.07] as const;
+
+const hashString = (input: string): number => {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const createSeededRandom = (seed: number) => {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+};
+
+const buildScatteredRtpMap = (cases: Case[]): Map<string, number> => {
+  const orderedCases = [...cases].sort((a, b) => hashString(a.key) - hashString(b.key));
+  const totalCases = orderedCases.length;
+
+  const counts = TARGET_RTPS.map(() => Math.floor(totalCases / TARGET_RTPS.length));
+  let remainder = totalCases - counts.reduce((acc, value) => acc + value, 0);
+  const startBucket = hashString('rtp_distribution_seed') % TARGET_RTPS.length;
+  while (remainder > 0) {
+    const idx = (startBucket + remainder - 1) % TARGET_RTPS.length;
+    counts[idx] += 1;
+    remainder -= 1;
+  }
+
+  const pool: number[] = [];
+  TARGET_RTPS.forEach((rtp, idx) => {
+    for (let i = 0; i < counts[idx]; i++) {
+      pool.push(rtp);
+    }
+  });
+
+  const random = createSeededRandom(hashString('rtp_pool_shuffle_seed'));
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    const tmp = pool[i];
+    pool[i] = pool[j];
+    pool[j] = tmp;
+  }
+
+  const targetByKey = new Map<string, number>();
+  for (let i = 0; i < orderedCases.length; i++) {
+    targetByKey.set(orderedCases[i].key, pool[i] ?? 1.0);
+  }
+  return targetByKey;
+};
 
 const roundToNearestNice = (value: number): number => {
   if (!Number.isFinite(value) || value <= 0) return 1;
@@ -847,14 +903,19 @@ const calcCaseExpectedValue = (c: Case): number => {
 };
 
 const rebalanceCasePrices = (cases: Case[]): Case[] => {
-  const adjustableCases = cases.filter((c) => !RARITY_CASE_KEYS.has(c.key));
-  const targetRtpByKey = new Map<string, number>();
-
-  adjustableCases.forEach((c, index) => {
-    targetRtpByKey.set(c.key, TARGET_RTPS[index % TARGET_RTPS.length]);
-  });
+  const adjustableCases = cases.filter(
+    (c) => !RARITY_CASE_KEYS.has(c.key) && !FIXED_PRICE_CASES.has(c.key)
+  );
+  const targetRtpByKey = buildScatteredRtpMap(adjustableCases);
 
   return cases.map((c) => {
+    const fixedPrice = FIXED_PRICE_CASES.get(c.key);
+    if (typeof fixedPrice === 'number') {
+      return {
+        ...c,
+        price: fixedPrice,
+      };
+    }
     if (RARITY_CASE_KEYS.has(c.key)) return c;
 
     const ev = calcCaseExpectedValue(c);

@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r6';
+const BUILD_MARKER = 'v5069015-r7';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -564,6 +564,7 @@ export default function App() {
   const [slotsSpinState, setSlotsSpinState] = useState<'IDLE' | 'PRE_SPIN' | 'SPINNING' | 'FINISHED'>('IDLE');
   const [slotsWinItem, setSlotsWinItem] = useState<BaseItem | null>(null);
   const [slotsReelStrips, setSlotsReelStrips] = useState<{item: BaseItem, payout: number}[][]>([[], [], []]);
+  const sellAllResetTimerRef = useRef<number | null>(null);
 
   const inventoryValueById = useMemo(() => {
     const valueById = new Map<string, number>();
@@ -600,6 +601,14 @@ export default function App() {
       return changed ? next : prev;
     });
   }, [inventoryValueById]);
+
+  useEffect(() => {
+    return () => {
+      if (sellAllResetTimerRef.current !== null) {
+        window.clearTimeout(sellAllResetTimerRef.current);
+      }
+    };
+  }, []);
 
   // --- INITIALIZATION ---
   useEffect(() => {
@@ -1060,34 +1069,25 @@ export default function App() {
     setSelectedInventoryIds(new Set());
     setShowSellAllConfirm(false);
 
-    const totalValue = inventoryValueById.total;
-    const executeSellAll = () => {
-      try {
-        setInventory([]);
-        setBalance(prev => prev + totalValue);
-      } catch (error) {
-        console.error('Failed to sell all inventory items', error);
-      } finally {
-        setIsSellAllPending(false);
-      }
-    };
+    const memoTotal = inventoryValueById.total;
+    const totalValue = memoTotal > 0 ? memoTotal : sumItemPrices(inventory);
 
-    let completed = false;
-    const runOnce = () => {
-      if (completed) return;
-      completed = true;
-      executeSellAll();
-    };
-
-    const fallbackTimer = window.setTimeout(runOnce, 32);
-    if (typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(() => {
-        window.clearTimeout(fallbackTimer);
-        runOnce();
-      });
-    } else {
-      runOnce();
+    try {
+      setInventory([]);
+      setBalance(prev => prev + totalValue);
+    } catch (error) {
+      console.error('Failed to sell all inventory items', error);
+      setIsSellAllPending(false);
+      return;
     }
+
+    if (sellAllResetTimerRef.current !== null) {
+      window.clearTimeout(sellAllResetTimerRef.current);
+    }
+    sellAllResetTimerRef.current = window.setTimeout(() => {
+      setIsSellAllPending(false);
+      sellAllResetTimerRef.current = null;
+    }, 100);
   };
 
   const toggleInventorySelection = useCallback((id: string) => {

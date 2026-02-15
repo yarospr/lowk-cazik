@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r10';
+const BUILD_MARKER = 'v5069015-r11';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -1004,14 +1004,14 @@ export default function App() {
     const newProfile = {
       ...playerProfile,
       name: inputName.trim(),
-      is_public: isTelegramUser ? inputIsPublic : false,
+      is_public: inputIsPublic,
     };
 
     const { error } = await supabase
       .from('players')
       .update({
         display_name: inputName.trim(),
-        is_public: isTelegramUser ? inputIsPublic : false,
+        is_public: inputIsPublic,
       })
       .eq('telegram_id', playerProfile.id);
 
@@ -1035,15 +1035,15 @@ export default function App() {
      const updated = {
        ...playerProfile,
        name: inputName.trim(),
-       is_public: isTelegramUser ? inputIsPublic : false
+       is_public: inputIsPublic
      };
 
      const { error } = await supabase
         .from('players')
-        .update({
+         .update({
           display_name: inputName.trim(),
-          is_public: isTelegramUser ? inputIsPublic : false
-        })
+          is_public: inputIsPublic
+         })
         .eq('telegram_id', playerProfile.id);
       
       if (error) {
@@ -1059,6 +1059,7 @@ export default function App() {
     const { data, error } = await supabase
       .from('players')
       .select('*')
+      .eq('is_public', true)
       .order('balance', { ascending: false })
       .limit(10);
     
@@ -1444,20 +1445,18 @@ export default function App() {
                 />
              </div>
              
-             {isTelegramUser && (
-               <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
-                  <input 
-                    type="checkbox"
-                    id="isPublic"
-                    checked={inputIsPublic}
-                    onChange={(e) => setInputIsPublic(e.target.checked)}
-                    className="mt-1 w-5 h-5 accent-yellow-500"
-                  />
-                  <label htmlFor="isPublic" className="text-sm text-slate-300">
-                    Показывать ссылку на мой Telegram в таблице лидеров
-                  </label>
-               </div>
-             )}
+             <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
+                <input 
+                  type="checkbox"
+                  id="isPublic"
+                  checked={inputIsPublic}
+                  onChange={(e) => setInputIsPublic(e.target.checked)}
+                  className="mt-1 w-5 h-5 accent-yellow-500"
+                />
+                <label htmlFor="isPublic" className="text-sm text-slate-300">
+                  Показывать мой профиль в таблице лидеров
+                </label>
+             </div>
 
              <Button onClick={handleRegister} className="w-full py-4 mt-2">
                Начать игру
@@ -1489,20 +1488,18 @@ export default function App() {
                 />
              </div>
              
-             {isTelegramUser && (
-               <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
-                  <input 
-                    type="checkbox"
-                    id="isPublicEdit"
-                    checked={inputIsPublic}
-                    onChange={(e) => setInputIsPublic(e.target.checked)}
-                    className="mt-1 w-5 h-5 accent-yellow-500"
-                  />
-                  <label htmlFor="isPublicEdit" className="text-sm text-slate-300">
-                    Показывать ссылку на Telegram в таблице лидеров
-                  </label>
-               </div>
-             )}
+             <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
+                <input 
+                  type="checkbox"
+                  id="isPublicEdit"
+                  checked={inputIsPublic}
+                  onChange={(e) => setInputIsPublic(e.target.checked)}
+                  className="mt-1 w-5 h-5 accent-yellow-500"
+                />
+                <label htmlFor="isPublicEdit" className="text-sm text-slate-300">
+                  Показывать мой профиль в таблице лидеров
+                </label>
+             </div>
 
              <Button onClick={handleUpdateSettings} className="w-full py-4 mt-2">
                Сохранить

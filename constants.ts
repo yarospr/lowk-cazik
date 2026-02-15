@@ -230,7 +230,7 @@ export const ITEMS_DATA: { [key: string]: BaseItem[] } = {
   ]
 };
 
-export const CASES_DATA: Case[] = [
+const RAW_CASES_DATA: Case[] = [
   {
     "key": "trash_case",
     "name": "Кейс с мусором",
@@ -800,3 +800,72 @@ export const CASES_DATA: Case[] = [
     ]
   }
 ];
+
+const detectItemPriceKey = (): string => {
+  const sample = ITEMS_DATA["items_db"][0] as Record<string, unknown> | undefined;
+  if (!sample) return 'price';
+
+  for (const [key, value] of Object.entries(sample)) {
+    if (key === 'id' || key === 'emg') continue;
+    if (typeof value === 'number') return key;
+  }
+
+  return 'price';
+};
+
+const ITEM_PRICE_KEY = detectItemPriceKey();
+
+const ITEM_PRICE_BY_ID = new Map<number, number>(
+  ITEMS_DATA["items_db"].map((item) => {
+    const record = item as Record<string, unknown>;
+    const value = Number(record[ITEM_PRICE_KEY]);
+    return [item.id, Number.isFinite(value) ? value : 0];
+  })
+);
+
+const RARITY_CASE_KEYS = new Set(['epic_case', 'mythic_case', 'legendary_case']);
+const TARGET_RTPS = [1.0, 0.95, 1.07] as const;
+
+const roundToNearestNice = (value: number): number => {
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  const magnitude = Math.pow(10, Math.max(0, Math.floor(Math.log10(value)) - 1));
+  return Math.max(1, Math.round(value / magnitude) * magnitude);
+};
+
+const calcCaseExpectedValue = (c: Case): number => {
+  let weighted = 0;
+  let chanceSum = 0;
+
+  for (const drop of c.items) {
+    const price = ITEM_PRICE_BY_ID.get(drop.id) ?? 0;
+    const chance = Number(drop.chance_percent) || 0;
+    weighted += price * chance;
+    chanceSum += chance;
+  }
+
+  return chanceSum > 0 ? weighted / chanceSum : 0;
+};
+
+const rebalanceCasePrices = (cases: Case[]): Case[] => {
+  const adjustableCases = cases.filter((c) => !RARITY_CASE_KEYS.has(c.key));
+  const targetRtpByKey = new Map<string, number>();
+
+  adjustableCases.forEach((c, index) => {
+    targetRtpByKey.set(c.key, TARGET_RTPS[index % TARGET_RTPS.length]);
+  });
+
+  return cases.map((c) => {
+    if (RARITY_CASE_KEYS.has(c.key)) return c;
+
+    const ev = calcCaseExpectedValue(c);
+    const targetRtp = targetRtpByKey.get(c.key) ?? 1.0;
+    const targetPrice = ev / targetRtp;
+
+    return {
+      ...c,
+      price: roundToNearestNice(targetPrice),
+    };
+  });
+};
+
+export const CASES_DATA: Case[] = rebalanceCasePrices(RAW_CASES_DATA);

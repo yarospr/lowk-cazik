@@ -912,24 +912,25 @@ export default function App() {
 
   const handleSellAll = () => {
     if (isSellAllPending) return;
+    if (inventory.length === 0) {
+      setShowSellAllConfirm(false);
+      return;
+    }
 
-    const inventorySnapshot = inventory;
     setIsSellAllPending(true);
     setSelectedInventoryIds(new Set());
     setShowSellAllConfirm(false);
 
-    window.setTimeout(() => {
-      let totalValue = 0;
-      for (let i = 0; i < inventorySnapshot.length; i += 1) {
-        totalValue += getItemPrice(inventorySnapshot[i]);
-      }
-
+    try {
+      const totalValue = sumItemPrices(inventory);
       setInventory([]);
       setBalance(prev => prev + totalValue);
+    } catch (error) {
+      console.error('Failed to sell all inventory items', error);
+    } finally {
       setIsSellAllPending(false);
-    }, 0);
+    }
   };
-
   // --- RENDERERS ---
 
   const renderWelcomeModal = () => (

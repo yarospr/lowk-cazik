@@ -1143,7 +1143,7 @@ export default function App() {
 
       <div className="p-4 pb-24 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
           {isSellAllPending ? (
-                <div className="col-span-3 py-20 text-center text-slate-500">Продажа всех предметов...</div>
+                <div className="col-span-3 py-20 text-center text-slate-500">РџСЂРѕРґР°Р¶Р° РІСЃРµС… РїСЂРµРґРјРµС‚РѕРІ...</div>
             ) : inventory.length === 0 ? (
               <div className="col-span-3 py-20 text-center text-slate-600 flex flex-col items-center">
                   <Box className="w-16 h-16 mb-4 opacity-50" />
@@ -1279,7 +1279,7 @@ export default function App() {
 
       <div className="p-4 pb-24 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
           {isSellAllPending ? (
-                <div className="col-span-3 py-20 text-center text-slate-500">Продажа всех предметов...</div>
+                <div className="col-span-3 py-20 text-center text-slate-500">РџСЂРѕРґР°Р¶Р° РІСЃРµС… РїСЂРµРґРјРµС‚РѕРІ...</div>
             ) : inventory.length === 0 ? (
               <div className="col-span-3 py-20 text-center text-slate-600 flex flex-col items-center">
                   <Box className="w-16 h-16 mb-4 opacity-50" />
@@ -1841,7 +1841,7 @@ export default function App() {
                    </p>
                    <div className="grid grid-cols-2 gap-3 w-full mt-2">
                       <Button onClick={() => setShowSellAllConfirm(false)} variant="secondary" className="w-full">РћС‚РјРµРЅР°</Button>
-                      <Button onClick={handleSellAll} disabled={isSellAllPending} variant="danger" className="w-full">{isSellAllPending ? 'Продаем...' : 'Продать все'}</Button>
+                      <Button onClick={handleSellAll} disabled={isSellAllPending} variant="danger" className="w-full">{isSellAllPending ? 'РџСЂРѕРґР°РµРј...' : 'РџСЂРѕРґР°С‚СЊ РІСЃРµ'}</Button>
                    </div>
                 </div>
              </div>
@@ -1896,7 +1896,7 @@ export default function App() {
 
         <div className="p-4 pb-32 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
             {isSellAllPending ? (
-                <div className="col-span-3 py-20 text-center text-slate-500">Продажа всех предметов...</div>
+                <div className="col-span-3 py-20 text-center text-slate-500">РџСЂРѕРґР°Р¶Р° РІСЃРµС… РїСЂРµРґРјРµС‚РѕРІ...</div>
             ) : inventory.length === 0 ? (
                 <div className="col-span-3 py-20 text-center text-slate-600 flex flex-col items-center">
                     <Box className="w-16 h-16 mb-4 opacity-50" />

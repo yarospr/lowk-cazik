@@ -6,6 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
+const BUILD_MARKER = 'v5069015-r2';
 
 const getItemById = (id: number): BaseItem | undefined => {
   return ITEMS_DATA["items_db"].find((i) => i.id === id);
@@ -202,6 +203,7 @@ const Header = ({ balance }: { balance: number }) => (
     <div className="flex items-center gap-2 bg-slate-900 px-4 py-2 rounded-full border border-slate-800 shadow-inner">
       <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
       <span className="font-mono font-bold text-yellow-100 text-lg">{formatMoney(balance)}</span>
+      <span className="text-[10px] text-slate-500 ml-2">{BUILD_MARKER}</span>
     </div>
   </div>
 );

@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r8';
+const BUILD_MARKER = 'v5069015-r9';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -1660,9 +1660,6 @@ export default function App() {
   const renderBusinessMenu = () => {
     const canStart = !businessState.active;
     const pendingReward = businessState.pendingReward;
-    const progressPercent = businessState.targetTotal > 0
-      ? Math.min(100, (businessState.earnedTotal / businessState.targetTotal) * 100)
-      : 0;
 
     return (
       <div className="flex flex-col h-full bg-slate-950">
@@ -1687,7 +1684,7 @@ export default function App() {
                 disabled={!canStart}
               />
             </div>
-            <div className="text-xs text-slate-500 mt-2">{'\u0426\u0435\u043b\u044c \u0431\u0438\u0437\u043d\u0435\u0441\u0430 \u0432\u044b\u0431\u0438\u0440\u0430\u0435\u0442\u0441\u044f \u0441\u043b\u0443\u0447\u0430\u0439\u043d\u043e \u043e\u0442 0.8x \u0434\u043e 1.3x \u0432\u043a\u043b\u0430\u0434\u0430.'}</div>
+            <div className="text-xs text-slate-500 mt-2">{'\u0411\u0438\u0437\u043d\u0435\u0441 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u0434\u043e \u0434\u043e\u0441\u0442\u0438\u0436\u0435\u043d\u0438\u044f \u0432\u043d\u0443\u0442\u0440\u0435\u043d\u043d\u0435\u0439 \u0446\u0435\u043b\u0438 \u0434\u043e\u0445\u043e\u0434\u0430.'}</div>
 
             <div className="grid grid-cols-4 gap-2 mt-3">
               {[1000, 5000, 10000, 50000].map((amount) => (
@@ -1722,7 +1719,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="grid grid-cols-2 gap-2 text-center">
                 <div className="bg-slate-950 rounded-xl p-2 border border-slate-800">
                   <div className="text-[10px] uppercase text-slate-500 font-bold">{'\u0412\u043b\u043e\u0436\u0435\u043d\u043e'}</div>
                   <div className="text-yellow-400 font-bold text-sm">{formatMoney(businessState.investment)}</div>
@@ -1731,14 +1728,6 @@ export default function App() {
                   <div className="text-[10px] uppercase text-slate-500 font-bold">{'\u0417\u0430\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u043e'}</div>
                   <div className="text-green-400 font-bold text-sm">{formatMoney(businessState.earnedTotal)}</div>
                 </div>
-                <div className="bg-slate-950 rounded-xl p-2 border border-slate-800">
-                  <div className="text-[10px] uppercase text-slate-500 font-bold">{'\u0426\u0435\u043b\u044c'}</div>
-                  <div className="text-blue-400 font-bold text-sm">{formatMoney(businessState.targetTotal)}</div>
-                </div>
-              </div>
-
-              <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-blue-500 to-green-500" style={{ width: `${progressPercent}%` }} />
               </div>
 
               {businessState.active && !pendingReward && (

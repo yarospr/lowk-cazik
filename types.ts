@@ -44,6 +44,7 @@ export enum AppScreen {
   BUSINESS_MENU = 'BUSINESS_MENU',
   MARKET_MENU = 'MARKET_MENU',
   MARKET_OFFER = 'MARKET_OFFER',
+  PLAYER_PROFILE = 'PLAYER_PROFILE',
   SLOTS_MENU = 'SLOTS_MENU',
   SLOTS_GAME = 'SLOTS_GAME',
   LEADERBOARD = 'LEADERBOARD'
@@ -58,4 +59,7 @@ export interface PlayerProfile {
   telegram_username?: string;
   is_public: boolean;
   show_profile_link: boolean;
+  stats_cases_opened: number;
+  stats_total_spent: number;
+  stats_total_won: number;
 }

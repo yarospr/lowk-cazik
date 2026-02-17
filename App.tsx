@@ -1,12 +1,12 @@
-
+﻿
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Menu, ChevronRight, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink } from 'lucide-react';
+import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Menu, ChevronRight, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2 } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r18';
+const BUILD_MARKER = 'v5069015-r20';
 const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || '').trim().replace(/^@/, '');
 const OFFER_ID_PREFIX = 'offer_';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
@@ -278,13 +278,13 @@ const findClosestItemByPrice = (targetPrice: number): BaseItem => {
   if (!ALL_ITEMS || ALL_ITEMS.length === 0) throw new Error("No items DB");
   
   return ALL_ITEMS.reduce((prev, curr) => {
-    return (Math.abs(curr.цена - targetPrice) < Math.abs(prev.цена - targetPrice) ? curr : prev);
+    return (Math.abs(getItemPrice(curr) - targetPrice) < Math.abs(getItemPrice(prev) - targetPrice) ? curr : prev);
   });
 };
 
 const getRandomItemNearPrice = (targetPrice: number): BaseItem => {
   // Range: 0.7x to 1.3x price
-  const candidates = ALL_ITEMS.filter(i => i.цена >= targetPrice * 0.7 && i.цена <= targetPrice * 1.3);
+  const candidates = ALL_ITEMS.filter(i => getItemPrice(i) >= targetPrice * 0.7 && getItemPrice(i) <= targetPrice * 1.3);
   
   if (candidates.length > 0) {
       const idx = Math.floor(Math.random() * candidates.length);
@@ -306,10 +306,15 @@ type TelegramUser = {
   last_name?: string;
 };
 
+type TelegramChat = {
+  username?: string;
+};
+
 type TelegramWebAppState = {
   initData?: string;
   initDataUnsafe?: {
     user?: TelegramUser;
+    chat?: TelegramChat;
     start_param?: string;
   };
   ready?: () => void;
@@ -325,10 +330,19 @@ type PlayerDbRow = {
   display_name?: string | null;
   is_public?: boolean | null;
   show_profile_link?: boolean | null;
+  stats_cases_opened?: number | null;
+  stats_total_spent?: number | null;
+  stats_total_won?: number | null;
 };
 
 type OfferVisibility = 'PUBLIC' | 'LINK_ONLY';
 type OfferStatus = 'ACTIVE' | 'SOLD' | 'CANCELLED';
+type MarketViewTab = 'MARKET' | 'MY_OFFERS';
+type StatsDelta = {
+  casesOpened?: number;
+  spent?: number;
+  won?: number;
+};
 
 type MarketOfferDbRow = {
   offer_id?: string;
@@ -492,6 +506,9 @@ const mapDbRowToProfile = (row: PlayerDbRow): PlayerProfile => {
     telegram_username: row.username || undefined,
     is_public: Boolean(row.is_public),
     show_profile_link: Boolean(row.show_profile_link ?? row.is_public),
+    stats_cases_opened: Math.max(0, Math.floor(toSafeNumber(row.stats_cases_opened))),
+    stats_total_spent: Math.max(0, Math.floor(toSafeNumber(row.stats_total_spent))),
+    stats_total_won: Math.max(0, Math.floor(toSafeNumber(row.stats_total_won))),
   };
 };
 
@@ -524,13 +541,17 @@ const CaseIcon = ({ emoji, className = "text-6xl" }: { emoji: string, className?
   </div>
 );
 
+const BalanceBadge = ({ balance, showMarker = false }: { balance: number; showMarker?: boolean }) => (
+  <div className="flex items-center gap-2 bg-slate-900 px-3 py-2 rounded-full border border-slate-800 shadow-inner">
+    <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
+    <span className="font-mono font-bold text-yellow-100 text-base">{formatMoney(balance)}</span>
+    {showMarker && <span className="text-[10px] text-slate-500 ml-1">{BUILD_MARKER}</span>}
+  </div>
+);
+
 const Header = ({ balance }: { balance: number }) => (
   <div className="sticky top-0 z-50 bg-slate-950/80 backdrop-blur-lg border-b border-slate-800 p-4 flex justify-between items-center">
-    <div className="flex items-center gap-2 bg-slate-900 px-4 py-2 rounded-full border border-slate-800 shadow-inner">
-      <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
-      <span className="font-mono font-bold text-yellow-100 text-lg">{formatMoney(balance)}</span>
-      <span className="text-[10px] text-slate-500 ml-2">{BUILD_MARKER}</span>
-    </div>
+    <BalanceBadge balance={balance} showMarker />
   </div>
 );
 
@@ -636,7 +657,7 @@ const Roulette: React.FC<{ caseData: Case, winner: BaseItem, onComplete: () => v
         onTransitionEnd={onComplete}
       >
         {strip.map(({ item, chance }, idx) => {
-           const cardStyle = getRouletteCardStyle(item.редкость);
+           const cardStyle = getRouletteCardStyle(getItemRarity(item));
 
            return (
             <div
@@ -652,7 +673,7 @@ const Roulette: React.FC<{ caseData: Case, winner: BaseItem, onComplete: () => v
               <div className="text-[10px] font-bold opacity-90 w-full text-right bg-black/20 px-1 rounded">{chance.toFixed(2)}%</div>
               <div className="text-5xl drop-shadow-xl my-auto">{item.emg}</div>
               <div className="w-full text-[9px] text-center leading-tight font-black bg-black/30 rounded px-1 py-1 text-white uppercase">
-                {item.название}
+                {getItemName(item)}
               </div>
             </div>
            );
@@ -805,6 +826,7 @@ export default function App() {
 
   // Market State
   const [marketOffers, setMarketOffers] = useState<MarketOffer[]>([]);
+  const [marketTabView, setMarketTabView] = useState<MarketViewTab>('MARKET');
   const [isLoadingMarket, setIsLoadingMarket] = useState(false);
   const [selectedMarketOffer, setSelectedMarketOffer] = useState<MarketOffer | null>(null);
   const [isBuyingMarketOffer, setIsBuyingMarketOffer] = useState(false);
@@ -815,6 +837,9 @@ export default function App() {
   const [createOfferVisibility, setCreateOfferVisibility] = useState<OfferVisibility>('PUBLIC');
   const [createdOfferLink, setCreatedOfferLink] = useState<string | null>(null);
   const [isPublishingOffer, setIsPublishingOffer] = useState(false);
+  const [isCancellingOffer, setIsCancellingOffer] = useState(false);
+  const [runtimeBotUsername, setRuntimeBotUsername] = useState('');
+  const [isTelegramRequiredForOffer, setIsTelegramRequiredForOffer] = useState(false);
   const pendingOfferIdRef = useRef<string | null>(null);
   const didHandleInitialOfferRef = useRef(false);
   const marketReturnTimerRef = useRef<number | null>(null);
@@ -870,6 +895,10 @@ export default function App() {
   const [isBusinessHydrated, setIsBusinessHydrated] = useState<boolean>(false);
   const businessStateRef = useRef<BusinessState>(EMPTY_BUSINESS_STATE);
 
+  // Player profile view state
+  const [selectedPlayerProfile, setSelectedPlayerProfile] = useState<PlayerProfile | null>(null);
+  const [isLoadingPlayerProfile, setIsLoadingPlayerProfile] = useState(false);
+
   const businessSecondsLeft = useMemo(() => {
     if (!businessState.active || businessState.pendingReward || businessState.nextDropAt === null) return 0;
     return Math.max(0, Math.ceil((businessState.nextDropAt - businessClockMs) / 1000));
@@ -886,6 +915,11 @@ export default function App() {
     return { valueById, total };
   }, [inventory]);
 
+  const resolvedBotUsername = useMemo(() => {
+    if (TELEGRAM_BOT_USERNAME) return TELEGRAM_BOT_USERNAME;
+    return runtimeBotUsername.trim().replace(/^@/, '');
+  }, [runtimeBotUsername]);
+
   const selectedSellValue = useMemo(() => {
     if (selectedInventoryIds.size === 0) return 0;
     let total = 0;
@@ -900,6 +934,23 @@ export default function App() {
     const onlyId = Array.from(selectedInventoryIds)[0];
     return inventory.find(item => item.uniqueId === onlyId) || null;
   }, [selectedInventoryIds, inventory]);
+
+  const applyStatsDelta = useCallback((delta: StatsDelta) => {
+    const addCases = Math.max(0, Math.floor(toSafeNumber(delta.casesOpened)));
+    const addSpent = Math.max(0, Math.floor(toSafeNumber(delta.spent)));
+    const addWon = Math.max(0, Math.floor(toSafeNumber(delta.won)));
+    if (addCases === 0 && addSpent === 0 && addWon === 0) return;
+
+    setPlayerProfile(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        stats_cases_opened: Math.max(0, prev.stats_cases_opened + addCases),
+        stats_total_spent: Math.max(0, prev.stats_total_spent + addSpent),
+        stats_total_won: Math.max(0, prev.stats_total_won + addWon),
+      };
+    });
+  }, []);
 
   useEffect(() => {
     setSelectedInventoryIds(prev => {
@@ -957,9 +1008,16 @@ export default function App() {
       tg?.ready?.();
       tg?.expand?.();
       const tgUser = tg?.initDataUnsafe?.user;
-      const isTelegramRuntime = /Telegram/i.test(window.navigator.userAgent || '');
-      const isTg = Boolean(tgUser?.id) && isTelegramRuntime;
+      const tgChatUsername = tg?.initDataUnsafe?.chat?.username || '';
+      setRuntimeBotUsername(String(tgChatUsername || '').trim().replace(/^@/, ''));
+      const isTg = Boolean(tgUser?.id);
       setIsTelegramUser(isTg);
+      if (initialOfferId && !isTg) {
+        setIsTelegramRequiredForOffer(true);
+        setIsLoaded(true);
+        return;
+      }
+      setIsTelegramRequiredForOffer(false);
       const userId = isTg ? String(tgUser?.id) : getOrCreateLocalPlayerId();
 
       const { data, error } = await supabase
@@ -983,6 +1041,9 @@ export default function App() {
           display_name: '',
           is_public: isTg,
           show_profile_link: isTg,
+          stats_cases_opened: 0,
+          stats_total_spent: 0,
+          stats_total_won: 0,
         };
 
         const { data: inserted, error: insertError } = await supabase
@@ -1002,6 +1063,9 @@ export default function App() {
             telegram_username: tgUser?.username,
             is_public: false,
             show_profile_link: false,
+            stats_cases_opened: 0,
+            stats_total_spent: 0,
+            stats_total_won: 0,
           });
           setBalance(INITIAL_BALANCE);
           setInventory([]);
@@ -1035,7 +1099,7 @@ export default function App() {
     };
 
     initPlayer();
-  }, []);
+  }, [initialOfferId]);
 
   const grantBusinessReward = useCallback((dropAt = Date.now()) => {
     let reward: BusinessRewardNotice | null = null;
@@ -1061,9 +1125,10 @@ export default function App() {
 
     if (reward) {
       // Reward item is committed to inventory immediately at drop time.
+      applyStatsDelta({ won: getItemPrice(reward.item) });
       setInventory(prev => [reward.item, ...prev]);
     }
-  }, []);
+  }, [applyStatsDelta]);
 
   const runBusinessCatchup = useCallback(() => {
     const now = Date.now();
@@ -1073,8 +1138,9 @@ export default function App() {
 
     setBusinessState(nextState);
     const generatedItems = rewards.map(entry => entry.item).reverse();
+    applyStatsDelta({ won: sumItemPrices(generatedItems) });
     setInventory(prev => [...generatedItems, ...prev]);
-  }, []);
+  }, [applyStatsDelta]);
 
   useEffect(() => {
     if (!playerProfile?.id) return;
@@ -1102,10 +1168,11 @@ export default function App() {
 
     if (rewards.length > 0) {
       const generatedItems = rewards.map(entry => entry.item).reverse();
+      applyStatsDelta({ won: sumItemPrices(generatedItems) });
       setInventory(prev => [...generatedItems, ...prev]);
     }
     setIsBusinessHydrated(true);
-  }, [playerProfile?.id]);
+  }, [playerProfile?.id, applyStatsDelta]);
 
   useEffect(() => {
     if (!playerProfile?.id || !isBusinessHydrated) return;
@@ -1164,7 +1231,10 @@ export default function App() {
         .from('players')
         .update({
           balance: balance,
-          inventory_json: inventory
+          inventory_json: inventory,
+          stats_cases_opened: playerProfile.stats_cases_opened,
+          stats_total_spent: playerProfile.stats_total_spent,
+          stats_total_won: playerProfile.stats_total_won,
         })
         .eq('telegram_id', playerProfile.id);
       
@@ -1182,20 +1252,26 @@ export default function App() {
       return;
     }
 
+    const nextShowProfileLink = isTelegramUser ? inputShowProfileLink : playerProfile.show_profile_link;
+
     const newProfile = {
       ...playerProfile,
       name: inputName.trim(),
       is_public: inputIsPublic,
-      show_profile_link: inputShowProfileLink,
+      show_profile_link: nextShowProfileLink,
     };
+
+    const updatePayload: Record<string, unknown> = {
+      display_name: inputName.trim(),
+      is_public: inputIsPublic,
+    };
+    if (isTelegramUser) {
+      updatePayload.show_profile_link = inputShowProfileLink;
+    }
 
     const { error } = await supabase
       .from('players')
-      .update({
-        display_name: inputName.trim(),
-        is_public: inputIsPublic,
-        show_profile_link: inputShowProfileLink,
-      })
+      .update(updatePayload)
       .eq('telegram_id', playerProfile.id);
 
     if (error) {
@@ -1215,20 +1291,26 @@ export default function App() {
        return;
      }
      
+     const nextShowProfileLink = isTelegramUser ? inputShowProfileLink : playerProfile.show_profile_link;
+
      const updated = {
        ...playerProfile,
        name: inputName.trim(),
        is_public: inputIsPublic,
-       show_profile_link: inputShowProfileLink,
+       show_profile_link: nextShowProfileLink,
      };
+
+     const updatePayload: Record<string, unknown> = {
+       display_name: inputName.trim(),
+       is_public: inputIsPublic,
+     };
+     if (isTelegramUser) {
+       updatePayload.show_profile_link = inputShowProfileLink;
+     }
 
      const { error } = await supabase
         .from('players')
-         .update({
-          display_name: inputName.trim(),
-          is_public: inputIsPublic,
-          show_profile_link: inputShowProfileLink,
-         })
+        .update(updatePayload)
         .eq('telegram_id', playerProfile.id);
       
       if (error) {
@@ -1260,19 +1342,45 @@ export default function App() {
     setIsLoadingLeaderboard(false);
   };
 
+  const openPlayerProfileById = useCallback(async (playerId: string) => {
+    const normalizedPlayerId = String(playerId || '').trim();
+    if (!normalizedPlayerId) return;
+
+    setIsLoadingPlayerProfile(true);
+    const { data, error } = await supabase
+      .from('players')
+      .select('*')
+      .eq('telegram_id', normalizedPlayerId)
+      .maybeSingle();
+
+    if (error || !data) {
+      console.error('Failed to load player profile', error);
+      setIsLoadingPlayerProfile(false);
+      return;
+    }
+
+    const row = data as PlayerDbRow;
+    const profile = mapDbRowToProfile(row);
+    profile.telegram_id = row.telegram_id;
+    profile.telegram_username = row.username || undefined;
+    setSelectedPlayerProfile(profile);
+    setScreen(AppScreen.PLAYER_PROFILE);
+    setIsLoadingPlayerProfile(false);
+  }, []);
+
   const buildOfferLink = useCallback((offerId: string) => {
     const normalizedOfferId = normalizeOfferId(offerId);
     if (!normalizedOfferId) return '';
 
-    if (TELEGRAM_BOT_USERNAME) {
+    if (resolvedBotUsername) {
       const startParam = encodeOfferStartParam(normalizedOfferId);
-      return `https://t.me/${TELEGRAM_BOT_USERNAME}/app?startapp=${encodeURIComponent(startParam)}`;
+      return `https://t.me/${resolvedBotUsername}/app?startapp=${encodeURIComponent(startParam)}`;
     }
 
     const url = new URL(`${window.location.origin}${window.location.pathname}`);
     url.searchParams.set('offer', normalizedOfferId);
     return url.toString();
-  }, []);
+  }, [resolvedBotUsername]);
 
   const copyText = useCallback(async (text: string) => {
     try {
@@ -1283,13 +1391,30 @@ export default function App() {
     }
   }, []);
 
-  const fetchMarketOffers = useCallback(async () => {
+  const fetchMarketOffers = useCallback(async (view: MarketViewTab = marketTabView) => {
     setIsLoadingMarket(true);
-    const { data, error } = await supabase
+    const currentPlayerId = String(playerProfile?.id || '').trim();
+
+    let query = supabase
       .from('market_offers')
       .select('*')
-      .eq('status', 'ACTIVE')
-      .eq('visibility', 'PUBLIC')
+      .eq('status', 'ACTIVE');
+
+    if (view === 'MY_OFFERS') {
+      if (!currentPlayerId) {
+        setMarketOffers([]);
+        setIsLoadingMarket(false);
+        return;
+      }
+      query = query.eq('seller_telegram_id', currentPlayerId);
+    } else {
+      query = query.eq('visibility', 'PUBLIC');
+      if (currentPlayerId) {
+        query = query.neq('seller_telegram_id', currentPlayerId);
+      }
+    }
+
+    const { data, error } = await query
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -1325,7 +1450,7 @@ export default function App() {
       .filter(Boolean) as MarketOffer[];
     setMarketOffers(mapped);
     setIsLoadingMarket(false);
-  }, []);
+  }, [marketTabView, playerProfile?.id]);
 
   const fetchSingleOffer = useCallback(async (offerId: string) => {
     const { data, error } = await supabase
@@ -1431,7 +1556,7 @@ export default function App() {
     setInventory(prev => prev.filter(item => item.uniqueId !== createOfferItem.uniqueId));
     setSelectedInventoryIds(new Set());
     setCreatedOfferLink(buildOfferLink(offerId));
-    await fetchMarketOffers();
+    await fetchMarketOffers(marketTabView);
     setIsPublishingOffer(false);
   }, [
     playerProfile,
@@ -1442,7 +1567,48 @@ export default function App() {
     inventory,
     buildOfferLink,
     fetchMarketOffers,
+    marketTabView,
   ]);
+
+  const handleCancelMarketOffer = useCallback(async (offer: MarketOffer) => {
+    if (!playerProfile) return;
+    if (offer.status !== 'ACTIVE') return;
+    if (offer.seller_telegram_id !== playerProfile.id) return;
+
+    setIsCancellingOffer(true);
+    const { data: cancelled, error } = await supabase
+      .from('market_offers')
+      .update({ status: 'CANCELLED' })
+      .eq('offer_id', offer.offer_id)
+      .eq('seller_telegram_id', playerProfile.id)
+      .eq('status', 'ACTIVE')
+      .select('*')
+      .maybeSingle();
+
+    if (error || !cancelled) {
+      alert('Не удалось снять товар с продажи');
+      setIsCancellingOffer(false);
+      await fetchMarketOffers(marketTabView);
+      return;
+    }
+
+    setInventory(prev => {
+      const exists = prev.some(item => item.uniqueId === offer.item.uniqueId);
+      if (exists) return prev;
+      return [offer.item, ...prev];
+    });
+
+    if (selectedMarketOffer?.offer_id === offer.offer_id) {
+      setSelectedMarketOffer({
+        ...offer,
+        status: 'CANCELLED',
+      });
+      setScreen(AppScreen.MARKET_MENU);
+    }
+
+    await fetchMarketOffers(marketTabView);
+    setIsCancellingOffer(false);
+  }, [fetchMarketOffers, marketTabView, playerProfile, selectedMarketOffer]);
 
   const handleBuySelectedOffer = useCallback(async () => {
     if (!selectedMarketOffer || !playerProfile) return;
@@ -1482,11 +1648,12 @@ export default function App() {
     if (claimError || !claimed) {
       alert('Товар уже куплен другим игроком');
       setIsBuyingMarketOffer(false);
-      await fetchMarketOffers();
+      await fetchMarketOffers(marketTabView);
       return;
     }
 
     setBalance(prev => prev - selectedMarketOffer.price);
+    applyStatsDelta({ spent: selectedMarketOffer.price });
     setInventory(prev => {
       const exists = prev.some(item => item.uniqueId === selectedMarketOffer.item.uniqueId);
       if (exists) return prev;
@@ -1495,15 +1662,19 @@ export default function App() {
 
     const { data: seller, error: sellerError } = await supabase
       .from('players')
-      .select('balance')
+      .select('balance, stats_total_won')
       .eq('telegram_id', selectedMarketOffer.seller_telegram_id)
       .maybeSingle();
 
     if (!sellerError && seller) {
       const sellerBalance = Math.floor(toSafeNumber((seller as PlayerDbRow).balance));
+      const sellerTotalWon = Math.floor(toSafeNumber((seller as PlayerDbRow).stats_total_won));
       await supabase
         .from('players')
-        .update({ balance: sellerBalance + selectedMarketOffer.price })
+        .update({
+          balance: sellerBalance + selectedMarketOffer.price,
+          stats_total_won: sellerTotalWon + selectedMarketOffer.price,
+        })
         .eq('telegram_id', selectedMarketOffer.seller_telegram_id);
     }
 
@@ -1517,7 +1688,7 @@ export default function App() {
       };
     });
 
-    await fetchMarketOffers();
+    await fetchMarketOffers(marketTabView);
     setIsBuyingMarketOffer(false);
     if (marketReturnTimerRef.current !== null) {
       window.clearTimeout(marketReturnTimerRef.current);
@@ -1528,16 +1699,16 @@ export default function App() {
       setActiveTab('market');
       marketReturnTimerRef.current = null;
     }, 1000);
-  }, [selectedMarketOffer, playerProfile, balance, fetchMarketOffers]);
+  }, [selectedMarketOffer, playerProfile, balance, fetchMarketOffers, marketTabView, applyStatsDelta]);
 
   useEffect(() => {
     if (screen !== AppScreen.MARKET_MENU) return;
-    fetchMarketOffers();
+    fetchMarketOffers(marketTabView);
     const timer = window.setInterval(() => {
-      fetchMarketOffers();
+      fetchMarketOffers(marketTabView);
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [screen, fetchMarketOffers]);
+  }, [screen, fetchMarketOffers, marketTabView]);
 
   useEffect(() => {
     if (!isLoaded || !playerProfile || didHandleInitialOfferRef.current) return;
@@ -1549,9 +1720,9 @@ export default function App() {
 
   useEffect(() => {
     if (screen === AppScreen.PROFILE) setActiveTab('profile');
-    else if (screen === AppScreen.LEADERBOARD) {
+    else if (screen === AppScreen.LEADERBOARD || screen === AppScreen.PLAYER_PROFILE) {
       setActiveTab('leaderboard');
-      fetchLeaderboard();
+      if (screen === AppScreen.LEADERBOARD) fetchLeaderboard();
     }
     else if (screen === AppScreen.MARKET_MENU || screen === AppScreen.MARKET_OFFER) setActiveTab('market');
     else if (screen === AppScreen.GAMES_MENU || screen === AppScreen.CASE_LIST || screen === AppScreen.ROCKET_MENU || screen === AppScreen.UPGRADER_MENU || screen === AppScreen.SLOTS_MENU || screen === AppScreen.BUSINESS_MENU) setActiveTab('games');
@@ -1562,7 +1733,10 @@ export default function App() {
     if (tab === 'games') setScreen(AppScreen.GAMES_MENU);
     if (tab === 'profile') setScreen(AppScreen.PROFILE);
     if (tab === 'leaderboard') setScreen(AppScreen.LEADERBOARD);
-    if (tab === 'market') setScreen(AppScreen.MARKET_MENU);
+    if (tab === 'market') {
+      setMarketTabView('MARKET');
+      setScreen(AppScreen.MARKET_MENU);
+    }
   };
 
   // --- SLOTS LOGIC ---
@@ -1573,11 +1747,12 @@ export default function App() {
     }
 
     setBalance(prev => prev - slotsBet);
+    applyStatsDelta({ spent: slotsBet });
     
     // 1. Select 4 random variants based on bet multipliers for THIS spin
     const multipliers = [0.5, 1.5, 5.0, 20.0];
     const variants = multipliers.map(m => getRandomItemNearPrice(slotsBet * m));
-    const variantData = variants.map(v => ({ item: v, payout: v.цена }));
+    const variantData = variants.map(v => ({ item: v, payout: getItemPrice(v) }));
 
     // 2. Logic for 97% RTP with Equal Chance per Item
     const sumPrices = variantData.reduce((acc, v) => acc + v.payout, 0);
@@ -1648,6 +1823,7 @@ export default function App() {
               serial: generateSerial(),
               obtainedAt: Date.now()
             };
+            applyStatsDelta({ won: getItemPrice(newItem) });
             setInventory(prev => [newItem, ...prev]);
         }
     }, 3500);
@@ -1659,7 +1835,7 @@ export default function App() {
     
     setUpgraderSpinState('SPINNING');
 
-    const chance = upgraderBetItem.цена / upgraderTargetItem.цена;
+    const chance = getItemPrice(upgraderBetItem) / getItemPrice(upgraderTargetItem);
     const winSectorDegrees = 360 * chance;
     
     const isWin = Math.random() < chance;
@@ -1686,10 +1862,14 @@ export default function App() {
   const handleUpgraderComplete = () => {
     if (!upgraderBetItem || !upgraderTargetItem) return;
     
-    const chance = upgraderBetItem.цена / upgraderTargetItem.цена;
+    const chance = getItemPrice(upgraderBetItem) / getItemPrice(upgraderTargetItem);
     const winSectorDegrees = 360 * chance;
     const normalizedAngle = upgraderRotation % 360;
     const isWin = normalizedAngle <= winSectorDegrees;
+    applyStatsDelta({
+      spent: getItemPrice(upgraderBetItem),
+      won: isWin ? getItemPrice(upgraderTargetItem) : 0,
+    });
 
     if (isWin) {
       setUpgraderSpinState('WIN');
@@ -1716,6 +1896,7 @@ export default function App() {
     setRocketState('FLYING');
     setRocketMultiplier(1.00);
     setRocketWinnings(null);
+    applyStatsDelta({ spent: getItemPrice(rocketBetItem) });
     
     const r = Math.random();
     const crash = 1.00 / (1 - r);
@@ -1745,7 +1926,7 @@ export default function App() {
     cancelAnimationFrame(rocketRequestRef.current!);
     setRocketState('CASHED_OUT');
     
-    const winValue = rocketBetItem.цена * rocketMultiplier;
+    const winValue = getItemPrice(rocketBetItem) * rocketMultiplier;
     const wonItemBase = findClosestItemByPrice(winValue);
     
     const wonItem: InventoryItem = {
@@ -1754,6 +1935,7 @@ export default function App() {
       serial: generateSerial(),
       obtainedAt: Date.now()
     };
+    applyStatsDelta({ won: getItemPrice(wonItem) });
     
     setRocketWinnings(wonItemBase);
     
@@ -1795,6 +1977,12 @@ export default function App() {
         });
       }
     }
+    const wonTotal = sumItemPrices(newItems);
+    applyStatsDelta({
+      casesOpened: openAmount,
+      spent: totalCost,
+      won: wonTotal,
+    });
     
     setDroppedItems(newItems);
     setScreen(AppScreen.ROULETTE);
@@ -1817,30 +2005,23 @@ export default function App() {
 
   const handleSellAll = () => {
     if (sellAllInFlightRef.current) return;
-
-    const snapshot = inventory;
-    if (snapshot.length === 0) {
+    if (inventory.length === 0) {
       setShowSellAllConfirm(false);
       return;
     }
 
+    const totalValue = inventoryValueById.total;
     sellAllInFlightRef.current = true;
     setIsSellAllPending(true);
     setShowSellAllConfirm(false);
     setSelectedInventoryIds(new Set());
 
-    let totalValue = 0;
-    for (const item of snapshot) {
-      totalValue += getItemPrice(item);
-    }
-
-    setInventory([]);
-    setBalance(prev => prev + totalValue);
-
-    Promise.resolve().then(() => {
+    window.setTimeout(() => {
+      setInventory([]);
+      setBalance(prev => prev + totalValue);
       setIsSellAllPending(false);
       sellAllInFlightRef.current = false;
-    });
+    }, 0);
   };
 
   const handleStartBusiness = () => {
@@ -1860,6 +2041,7 @@ export default function App() {
     const now = Date.now();
 
     setBalance(prev => prev - investment);
+    applyStatsDelta({ spent: investment });
     setBusinessState({
       active: true,
       investment,
@@ -1935,18 +2117,20 @@ export default function App() {
                   Показывать мой профиль в таблице лидеров
                 </label>
              </div>
-             <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
-                <input
-                  type="checkbox"
-                  id="showProfileLink"
-                  checked={inputShowProfileLink}
-                  onChange={(e) => setInputShowProfileLink(e.target.checked)}
-                  className="mt-1 w-5 h-5 accent-yellow-500"
-                />
-                <label htmlFor="showProfileLink" className="text-sm text-slate-300">
-                  Отображать ссылку на мой профиль
-                </label>
-             </div>
+             {isTelegramUser && (
+               <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
+                  <input
+                    type="checkbox"
+                    id="showProfileLink"
+                    checked={inputShowProfileLink}
+                    onChange={(e) => setInputShowProfileLink(e.target.checked)}
+                    className="mt-1 w-5 h-5 accent-yellow-500"
+                  />
+                  <label htmlFor="showProfileLink" className="text-sm text-slate-300">
+                    Отображать ссылку на мой профиль
+                  </label>
+               </div>
+             )}
 
              <Button onClick={handleRegister} className="w-full py-4 mt-2">
                Начать игру
@@ -1990,18 +2174,20 @@ export default function App() {
                   Показывать мой профиль в таблице лидеров
                 </label>
              </div>
-             <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
-                <input
-                  type="checkbox"
-                  id="showProfileLinkEdit"
-                  checked={inputShowProfileLink}
-                  onChange={(e) => setInputShowProfileLink(e.target.checked)}
-                  className="mt-1 w-5 h-5 accent-yellow-500"
-                />
-                <label htmlFor="showProfileLinkEdit" className="text-sm text-slate-300">
-                  Отображать ссылку на мой профиль
-                </label>
-             </div>
+             {isTelegramUser && (
+               <div className="flex items-start gap-3 p-3 bg-slate-950 rounded-lg border border-slate-800">
+                  <input
+                    type="checkbox"
+                    id="showProfileLinkEdit"
+                    checked={inputShowProfileLink}
+                    onChange={(e) => setInputShowProfileLink(e.target.checked)}
+                    className="mt-1 w-5 h-5 accent-yellow-500"
+                  />
+                  <label htmlFor="showProfileLinkEdit" className="text-sm text-slate-300">
+                    Отображать ссылку на мой профиль
+                  </label>
+               </div>
+             )}
 
              <Button onClick={handleUpdateSettings} className="w-full py-4 mt-2">
                Сохранить
@@ -2038,12 +2224,21 @@ export default function App() {
                              </div>
                              <div>
                                 <div className="font-bold text-white flex items-center gap-2">
-                                   {p.show_profile_link && p.telegram_username ? (
-                                      <a href={`https://t.me/${p.telegram_username}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 hover:text-blue-400 transition-colors">
-                                         {p.name} <ExternalLink className="w-3 h-3" />
-                                      </a>
-                                   ) : (
-                                      p.name || 'Unknown'
+                                   <button
+                                     onClick={() => { void openPlayerProfileById(p.id); }}
+                                     className="hover:text-yellow-300 transition-colors text-left"
+                                   >
+                                     {p.name || 'Unknown'}
+                                   </button>
+                                   {p.show_profile_link && p.telegram_username && (
+                                     <a
+                                       href={`https://t.me/${p.telegram_username}`}
+                                       target="_blank"
+                                       rel="noopener noreferrer"
+                                       className="text-slate-400 hover:text-blue-400 transition-colors"
+                                     >
+                                       <ExternalLink className="w-3 h-3" />
+                                     </a>
                                    )}
                                    {isMe && <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-1.5 rounded ml-1">ВЫ</span>}
                                 </div>
@@ -2064,6 +2259,98 @@ export default function App() {
              )}
           </div>
       </div>
+  );
+
+  const renderStatsCards = (profile: PlayerProfile) => (
+    <div className="grid grid-cols-3 gap-2">
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-2 text-center">
+        <div className="text-[10px] text-slate-500 uppercase font-bold">Кейсы</div>
+        <div className="text-sm font-bold text-white">{formatMoney(profile.stats_cases_opened)}</div>
+      </div>
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-2 text-center">
+        <div className="text-[10px] text-slate-500 uppercase font-bold">Потрачено</div>
+        <div className="text-sm font-bold text-red-300">{formatMoney(profile.stats_total_spent)}</div>
+      </div>
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-2 text-center">
+        <div className="text-[10px] text-slate-500 uppercase font-bold">Выиграно</div>
+        <div className="text-sm font-bold text-green-300">{formatMoney(profile.stats_total_won)}</div>
+      </div>
+    </div>
+  );
+
+  const renderPlayerProfile = () => (
+    <div className="flex flex-col h-full bg-slate-950">
+      <div className="p-4 bg-slate-900/90 backdrop-blur border-b border-slate-800 sticky top-0 z-10 flex items-center gap-2">
+        <button onClick={() => setScreen(AppScreen.LEADERBOARD)} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800">
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+        <h2 className="text-lg font-bold text-white truncate">Профиль игрока</h2>
+        <div className="ml-auto">
+          <BalanceBadge balance={balance} />
+        </div>
+      </div>
+
+      <div className="p-4 pb-24 overflow-y-auto custom-scrollbar space-y-4">
+        {isLoadingPlayerProfile ? (
+          <div className="py-20 flex justify-center text-yellow-500"><Loader2 className="w-8 h-8 animate-spin"/></div>
+        ) : !selectedPlayerProfile ? (
+          <div className="text-center text-slate-500 py-12">Профиль не найден</div>
+        ) : (
+          <>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xl font-bold text-white">{selectedPlayerProfile.name || 'Unknown'}</div>
+                  <div className="text-xs text-slate-500 mt-1">{`ID: ${selectedPlayerProfile.id.slice(0, 12)}`}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs uppercase text-slate-500 font-bold">Баланс</div>
+                  <div className="text-yellow-400 font-bold flex items-center justify-end gap-1">
+                    <Star className="w-3 h-3 fill-yellow-400" />
+                    {formatMoney(selectedPlayerProfile.balance)}
+                  </div>
+                </div>
+              </div>
+              {selectedPlayerProfile.show_profile_link && selectedPlayerProfile.telegram_username && (
+                <a
+                  href={`https://t.me/${selectedPlayerProfile.telegram_username}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-3"
+                >
+                  @{selectedPlayerProfile.telegram_username} <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </div>
+
+            {renderStatsCards(selectedPlayerProfile)}
+
+            <div className="space-y-2">
+              <div className="text-xs uppercase text-slate-500 font-bold">{`Предметов: ${selectedPlayerProfile.inventory.length}`}</div>
+              {selectedPlayerProfile.inventory.length === 0 ? (
+                <div className="text-slate-500 text-sm py-8 text-center bg-slate-900 border border-slate-800 rounded-xl">Инвентарь пуст</div>
+              ) : (
+                selectedPlayerProfile.inventory.map((item) => (
+                  <div key={item.uniqueId} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center gap-3">
+                    <div className="w-12 h-12 bg-slate-800 rounded-lg border border-slate-700 flex items-center justify-center text-2xl">
+                      {item.emg}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-sm text-white truncate">{getItemName(item)}</div>
+                      <div className="text-[11px] text-slate-500">{`ID: ${item.uniqueId}`}</div>
+                    </div>
+                    <div className="text-yellow-400 font-bold text-xs flex items-center gap-1">
+                      <Star className="w-3 h-3 fill-yellow-400" />
+                      {formatMoney(getItemPrice(item))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 
   const renderCreateOfferModal = () => {
@@ -2159,21 +2446,40 @@ export default function App() {
           <Banknote className="w-6 h-6 text-yellow-500" /> {'Рынок'}
         </h2>
         <button
-          onClick={() => fetchMarketOffers()}
+          onClick={() => fetchMarketOffers(marketTabView)}
           className="text-xs text-slate-300 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 hover:bg-slate-700"
         >
           {'Обновить'}
         </button>
       </div>
 
+      <div className="px-4 pt-3">
+        <div className="grid grid-cols-2 gap-2 bg-slate-900 border border-slate-800 p-1 rounded-xl">
+          <button
+            onClick={() => setMarketTabView('MARKET')}
+            className={`py-2 text-xs font-bold rounded-lg transition-colors ${marketTabView === 'MARKET' ? 'bg-yellow-500 text-black' : 'text-slate-300 hover:bg-slate-800'}`}
+          >
+            {'Рынок'}
+          </button>
+          <button
+            onClick={() => setMarketTabView('MY_OFFERS')}
+            className={`py-2 text-xs font-bold rounded-lg transition-colors ${marketTabView === 'MY_OFFERS' ? 'bg-yellow-500 text-black' : 'text-slate-300 hover:bg-slate-800'}`}
+          >
+            {'Мои товары'}
+          </button>
+        </div>
+      </div>
+
       <div className="p-4 pb-24 overflow-y-auto custom-scrollbar space-y-3">
         {isLoadingMarket ? (
           <div className="py-20 flex justify-center text-yellow-500"><Loader2 className="w-8 h-8 animate-spin" /></div>
         ) : marketOffers.length === 0 ? (
-          <div className="text-center py-16 text-slate-500">{'Пока нет активных предложений'}</div>
+          <div className="text-center py-16 text-slate-500">
+            {marketTabView === 'MY_OFFERS' ? 'У вас нет активных товаров' : 'Пока нет активных предложений'}
+          </div>
         ) : (
           marketOffers.map((offer) => (
-            <button
+            <div
               key={offer.offer_id}
               onClick={() => { void openOfferById(offer.offer_id); }}
               className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-left hover:border-yellow-500/40 transition-all"
@@ -2202,7 +2508,21 @@ export default function App() {
                   </div>
                 </div>
               </div>
-            </button>
+
+              {marketTabView === 'MY_OFFERS' && (
+                <Button
+                  onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
+                    event.stopPropagation();
+                    void handleCancelMarketOffer(offer);
+                  }}
+                  variant="danger"
+                  disabled={isCancellingOffer}
+                  className="w-full mt-3 py-2"
+                >
+                  {isCancellingOffer ? 'Снимаем...' : 'Снять с продажи'}
+                </Button>
+              )}
+            </div>
           ))
         )}
       </div>
@@ -2213,7 +2533,7 @@ export default function App() {
     if (!selectedMarketOffer) return null;
 
     const offer = selectedMarketOffer;
-    const currentUserId = isTelegramUser ? (playerProfile?.telegram_id || playerProfile?.id || '') : '';
+    const currentUserId = String(playerProfile?.id || '');
     const isOwnOffer = Boolean(currentUserId) && offer.seller_telegram_id === currentUserId;
     const isBoughtByCurrentUser = offer.status !== 'ACTIVE' && Boolean(currentUserId) && offer.buyer_telegram_id === currentUserId;
     const canBuy = offer.status === 'ACTIVE' && !isOwnOffer && balance >= offer.price;
@@ -2225,7 +2545,17 @@ export default function App() {
           <button onClick={() => setScreen(AppScreen.MARKET_MENU)} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800">
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h2 className="text-xl font-bold text-white">{'Товар на рынке'}</h2>
+          <h2 className="text-xl font-bold text-white truncate">{'Товар на рынке'}</h2>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => copyText(offerLink)}
+              className="p-2 bg-slate-900 rounded-full hover:bg-slate-800 text-slate-300"
+              title="Копировать ссылку"
+            >
+              <Link2 className="w-4 h-4" />
+            </button>
+            <BalanceBadge balance={balance} />
+          </div>
         </div>
 
         <div className="p-4 pb-24 overflow-y-auto custom-scrollbar space-y-4">
@@ -2258,21 +2588,13 @@ export default function App() {
             </div>
           </div>
 
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-            <div className="text-xs uppercase text-slate-500 font-bold mb-2">{'Ссылка на товар'}</div>
-            <div className="text-xs text-slate-400 break-all">{offerLink}</div>
-            <Button onClick={() => copyText(offerLink)} className="w-full mt-3">
-              {'Копировать ссылку'}
-            </Button>
-          </div>
-
           {offer.status !== 'ACTIVE' ? (
             <Button disabled variant="secondary" className="w-full">
               {isBoughtByCurrentUser ? 'Куплено!' : 'Товар уже недоступен'}
             </Button>
           ) : isOwnOffer ? (
-            <Button disabled variant="secondary" className="w-full">
-              {'Это ваш товар'}
+            <Button onClick={() => { void handleCancelMarketOffer(offer); }} disabled={isCancellingOffer} variant="danger" className="w-full">
+              {isCancellingOffer ? 'Снимаем...' : 'Снять с продажи'}
             </Button>
           ) : (
             <Button onClick={handleBuySelectedOffer} disabled={!canBuy || isBuyingMarketOffer} className="w-full py-4 text-lg">
@@ -2371,6 +2693,9 @@ export default function App() {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <h2 className="text-xl font-bold text-white">{'\u0411\u0438\u0437\u043d\u0435\u0441'}</h2>
+          <div className="ml-auto">
+            <BalanceBadge balance={balance} />
+          </div>
         </div>
 
         <div className="p-4 pb-24 overflow-y-auto custom-scrollbar space-y-4">
@@ -2494,6 +2819,9 @@ export default function App() {
            <ArrowLeft className="w-5 h-5" />
          </button>
          <h2 className="text-xl font-bold text-white">Ракетка: Выбор ставки</h2>
+         <div className="ml-auto">
+           <BalanceBadge balance={balance} />
+         </div>
       </div>
 
       <div className="p-4 pb-24 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
@@ -2550,6 +2878,7 @@ export default function App() {
                 }} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800 disabled:opacity-0" disabled={rocketState === 'FLYING'}>
                     <ArrowLeft className="w-6 h-6" />
                 </button>
+                <BalanceBadge balance={balance} />
             </div>
 
             <div className="flex-1 flex flex-col items-center justify-center relative z-10">
@@ -2568,9 +2897,9 @@ export default function App() {
                             <div className="mt-6 bg-slate-900/80 p-4 rounded-xl border border-green-500/30 flex flex-col items-center gap-2">
                                 <span className="text-xs text-slate-400 uppercase">Выигран предмет</span>
                                 <span className="text-4xl">{rocketWinnings.emg}</span>
-                                <span className="font-bold text-white">{rocketWinnings.название}</span>
+                                <span className="font-bold text-white">{getItemName(rocketWinnings)}</span>
                                 <span className="text-yellow-400 font-bold flex items-center gap-1 text-sm">
-                                    <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(rocketWinnings.цена)}
+                                    <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(getItemPrice(rocketWinnings))}
                                 </span>
                             </div>
                         )}
@@ -2584,7 +2913,7 @@ export default function App() {
                             {rocketMultiplier.toFixed(2)}x
                         </div>
                         {rocketState === 'FLYING' && (
-                            <div className="text-sm text-slate-400 mt-2 font-mono">Win: {rocketBetItem ? formatMoney(rocketBetItem.цена * rocketMultiplier) : 0}</div>
+                            <div className="text-sm text-slate-400 mt-2 font-mono">Win: {rocketBetItem ? formatMoney(getItemPrice(rocketBetItem) * rocketMultiplier) : 0}</div>
                         )}
                      </div>
                  )}
@@ -2596,8 +2925,8 @@ export default function App() {
                         <div className="flex items-center gap-3 bg-slate-800 p-3 rounded-xl border border-slate-700">
                             <div className="text-3xl">{rocketBetItem.emg}</div>
                             <div className="flex-1 min-w-0">
-                                <div className="text-sm font-bold truncate">{rocketBetItem.название}</div>
-                                <div className="text-xs text-yellow-400 flex items-center gap-1"><Star className="w-3 h-3 fill-yellow-400"/> {formatMoney(rocketBetItem.цена)}</div>
+                                <div className="text-sm font-bold truncate">{getItemName(rocketBetItem)}</div>
+                                <div className="text-xs text-yellow-400 flex items-center gap-1"><Star className="w-3 h-3 fill-yellow-400"/> {formatMoney(getItemPrice(rocketBetItem))}</div>
                             </div>
                             <div className="text-xs text-slate-500 uppercase font-bold">СТАВКА</div>
                         </div>
@@ -2630,6 +2959,9 @@ export default function App() {
            <ArrowLeft className="w-5 h-5" />
          </button>
          <h2 className="text-xl font-bold text-white">Улучшения: Выбор предмета</h2>
+         <div className="ml-auto">
+           <BalanceBadge balance={balance} />
+         </div>
       </div>
 
       <div className="p-4 pb-24 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
@@ -2671,8 +3003,8 @@ export default function App() {
     if (!upgraderBetItem) return null;
 
     const targets = ITEMS_DATA["items_db"]
-        .filter(i => i.цена > upgraderBetItem.цена)
-        .sort((a, b) => a.цена - b.цена)
+        .filter(i => getItemPrice(i) > getItemPrice(upgraderBetItem))
+        .sort((a, b) => getItemPrice(a) - getItemPrice(b))
         .slice(0, 10);
 
     return (
@@ -2682,6 +3014,9 @@ export default function App() {
                     <ArrowLeft className="w-5 h-5" />
                 </button>
                 <h2 className="text-xl font-bold text-white">Выберите цель</h2>
+                <div className="ml-auto">
+                  <BalanceBadge balance={balance} />
+                </div>
             </div>
 
             <div className="p-4 bg-slate-900 border-b border-slate-800 flex items-center gap-3">
@@ -2690,8 +3025,8 @@ export default function App() {
                 </div>
                 <div>
                     <div className="text-xs text-slate-500 uppercase font-bold">Ваша ставка</div>
-                    <div className="font-bold text-sm">{upgraderBetItem.название}</div>
-                    <div className="text-xs text-yellow-400 font-bold">{formatMoney(upgraderBetItem.цена)} <Star className="inline w-3 h-3"/></div>
+                    <div className="font-bold text-sm">{getItemName(upgraderBetItem)}</div>
+                    <div className="text-xs text-yellow-400 font-bold">{formatMoney(getItemPrice(upgraderBetItem))} <Star className="inline w-3 h-3"/></div>
                 </div>
             </div>
 
@@ -2700,8 +3035,8 @@ export default function App() {
                     <div className="text-center py-10 text-slate-500">Нет доступных улучшений (этот предмет слишком дорогой)</div>
                 ) : (
                     targets.map(target => {
-                        const chance = (upgraderBetItem.цена / target.цена) * 100;
-                        const rarityCol = getRarityColor(target.редкость);
+                        const chance = (getItemPrice(upgraderBetItem) / getItemPrice(target)) * 100;
+                        const rarityCol = getRarityColor(getItemRarity(target));
                         
                         return (
                             <button
@@ -2717,9 +3052,9 @@ export default function App() {
                                 <div className="flex items-center gap-3">
                                     <div className="text-3xl">{target.emg}</div>
                                     <div className="text-left">
-                                        <div className="font-bold text-sm text-white">{target.название}</div>
+                                        <div className="font-bold text-sm text-white">{getItemName(target)}</div>
                                         <div className="text-xs text-yellow-400 font-bold flex items-center gap-1">
-                                            {formatMoney(target.цена)} <Star className="w-3 h-3 fill-yellow-400"/>
+                                            {formatMoney(getItemPrice(target))} <Star className="w-3 h-3 fill-yellow-400"/>
                                         </div>
                                     </div>
                                 </div>
@@ -2741,7 +3076,7 @@ export default function App() {
   const renderUpgraderGame = () => {
       if (!upgraderBetItem || !upgraderTargetItem) return null;
 
-      const chance = upgraderBetItem.цена / upgraderTargetItem.цена;
+      const chance = getItemPrice(upgraderBetItem) / getItemPrice(upgraderTargetItem);
       const percent = (chance * 100).toFixed(2);
       
       const r = 100;
@@ -2758,6 +3093,7 @@ export default function App() {
                   }} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800 disabled:opacity-0" disabled={upgraderSpinState === 'SPINNING'}>
                       <ArrowLeft className="w-6 h-6" />
                   </button>
+                  <BalanceBadge balance={balance} />
               </div>
 
               <div className="flex-1 flex flex-col items-center justify-center gap-8 relative">
@@ -2805,8 +3141,8 @@ export default function App() {
                    <div className="flex items-center gap-4 px-6 w-full max-w-sm">
                         <div className={`flex-1 bg-slate-900 border rounded-xl p-3 flex flex-col items-center relative ${upgraderSpinState === 'WIN' ? 'opacity-30 grayscale' : 'border-slate-700'}`}>
                              <div className="text-3xl mb-1">{upgraderBetItem.emg}</div>
-                             <div className="text-xs font-bold text-center leading-tight">{upgraderBetItem.название}</div>
-                             <div className="text-xs text-yellow-500 mt-1">{formatMoney(upgraderBetItem.цена)}</div>
+                             <div className="text-xs font-bold text-center leading-tight">{getItemName(upgraderBetItem)}</div>
+                             <div className="text-xs text-yellow-500 mt-1">{formatMoney(getItemPrice(upgraderBetItem))}</div>
                              {upgraderSpinState === 'LOSE' && <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-xl text-red-500 font-bold text-xl rotate-12 uppercase border-2 border-red-500">Потеряно</div>}
                         </div>
                         
@@ -2814,8 +3150,8 @@ export default function App() {
 
                         <div className={`flex-1 bg-slate-900 border rounded-xl p-3 flex flex-col items-center relative ${upgraderSpinState === 'LOSE' ? 'opacity-30 grayscale' : 'border-green-500/50 bg-green-900/10'}`}>
                              <div className="text-3xl mb-1">{upgraderTargetItem.emg}</div>
-                             <div className="text-xs font-bold text-center leading-tight">{upgraderTargetItem.название}</div>
-                             <div className="text-xs text-yellow-500 mt-1">{formatMoney(upgraderTargetItem.цена)}</div>
+                             <div className="text-xs font-bold text-center leading-tight">{getItemName(upgraderTargetItem)}</div>
+                             <div className="text-xs text-yellow-500 mt-1">{formatMoney(getItemPrice(upgraderTargetItem))}</div>
                              {upgraderSpinState === 'WIN' && <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-xl text-green-400 font-bold text-xl -rotate-12 uppercase border-2 border-green-500">Получено</div>}
                         </div>
                    </div>
@@ -2849,6 +3185,9 @@ export default function App() {
                <ArrowLeft className="w-5 h-5" />
              </button>
              <h2 className="text-xl font-bold text-white">Слоты</h2>
+             <div className="ml-auto">
+               <BalanceBadge balance={balance} />
+             </div>
           </div>
 
           <div className="flex-1 flex flex-col items-center justify-center p-4 pb-20">
@@ -2905,8 +3244,11 @@ export default function App() {
                 }} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800 disabled:opacity-0" disabled={slotsSpinState === 'SPINNING'}>
                     <ArrowLeft className="w-6 h-6" />
                 </button>
-                <div className="font-mono text-yellow-400 font-bold flex items-center gap-2 bg-slate-900 px-3 py-1 rounded-lg">
-                    Ставка: {formatMoney(slotsBet)} <Star className="w-4 h-4 fill-yellow-400" />
+                <div className="flex items-center gap-2">
+                  <div className="font-mono text-yellow-400 font-bold flex items-center gap-2 bg-slate-900 px-3 py-1 rounded-lg">
+                      Ставка: {formatMoney(slotsBet)} <Star className="w-4 h-4 fill-yellow-400" />
+                  </div>
+                  <BalanceBadge balance={balance} />
                 </div>
             </div>
 
@@ -2943,10 +3285,10 @@ export default function App() {
                                       >
                                           <div className="text-5xl mb-2 drop-shadow-lg">{itemData.item.emg}</div>
                                           <div className="text-[10px] font-bold text-slate-300 text-center leading-none px-1 line-clamp-2 max-w-full">
-                                              {itemData.item.название}
+                                              {getItemName(itemData.item)}
                                           </div>
                                           <div className="text-[10px] text-yellow-500 font-mono mt-1">
-                                              {formatMoney(itemData.item.цена)}
+                                              {formatMoney(getItemPrice(itemData.item))}
                                           </div>
                                       </div>
                                   ))}
@@ -2965,10 +3307,10 @@ export default function App() {
                                 <div className="text-white mt-1">Получен предмет:</div>
                                 <div className="text-xl font-bold flex flex-col items-center justify-center text-yellow-400 mt-2 bg-slate-900 px-4 py-2 rounded-xl border border-yellow-500/50">
                                      <div className="flex items-center gap-2">
-                                        {slotsWinItem.emg} {slotsWinItem.название}
+                                        {slotsWinItem.emg} {getItemName(slotsWinItem)}
                                      </div>
                                      <div className="text-sm text-slate-400 mt-1">
-                                        Цена: {formatMoney(slotsWinItem.цена)}
+                                        Цена: {formatMoney(getItemPrice(slotsWinItem))}
                                      </div>
                                 </div>
                             </div>
@@ -3012,6 +3354,9 @@ export default function App() {
              <ArrowLeft className="w-5 h-5" />
            </button>
            <h2 className="text-xl font-bold text-white">Магазин Кейсов</h2>
+           <div className="ml-auto">
+             <BalanceBadge balance={balance} />
+           </div>
         </div>
         
         <div className="flex-1 overflow-y-auto pb-24 space-y-6 p-4 custom-scrollbar">
@@ -3075,6 +3420,9 @@ export default function App() {
             <ArrowLeft className="w-6 h-6" />
           </button>
           <h2 className="font-bold text-lg text-white truncate">{selectedCase.name}</h2>
+          <div className="ml-auto">
+            <BalanceBadge balance={balance} />
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto pb-72 custom-scrollbar">
@@ -3093,20 +3441,20 @@ export default function App() {
              <h3 className="text-slate-500 text-xs uppercase font-bold mb-4 tracking-widest pl-2 border-l-2 border-yellow-500">Содержимое кейса</h3>
              <div className="space-y-2">
                {drops.map((item) => (
-                 <div key={item.id} className={`flex items-center justify-between p-2 rounded-r-lg border-l-4 bg-slate-900/50 ${getRarityColor(item.редкость).replace('border', 'border-l')}`}>
+                 <div key={item.id} className={`flex items-center justify-between p-2 rounded-r-lg border-l-4 bg-slate-900/50 ${getRarityColor(getItemRarity(item)).replace('border', 'border-l')}`}>
                    <div className="flex items-center gap-3">
                      <div className="w-10 h-10 bg-slate-800 rounded flex items-center justify-center text-xl shadow-inner">
                        {item.emg}
                      </div>
                      <div>
-                       <div className="font-bold text-sm text-slate-200">{item.название}</div>
-                       <div className="text-[10px] text-slate-400 uppercase tracking-wide">{item.редкость}</div>
+                       <div className="font-bold text-sm text-slate-200">{getItemName(item)}</div>
+                       <div className="text-[10px] text-slate-400 uppercase tracking-wide">{getItemRarity(item)}</div>
                      </div>
                    </div>
                    <div className="text-right pr-2">
                      <div className="text-xs font-bold text-slate-400">{item.chance.toFixed(2)}%</div>
                      <div className="text-xs text-yellow-500 flex items-center justify-end gap-1">
-                       {item.цена} <Star className="w-2 h-2 fill-yellow-500" />
+                       {getItemPrice(item)} <Star className="w-2 h-2 fill-yellow-500" />
                      </div>
                    </div>
                  </div>
@@ -3145,7 +3493,7 @@ export default function App() {
                 <div key={idx} className={`relative group bg-slate-900 border-2 rounded-xl p-4 flex flex-col items-center overflow-hidden animate-in zoom-in duration-500 fill-mode-backwards ${rarityCol} ${glow}`} style={{animationDelay: `${idx * 100}ms`}}>
                    <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
                    <div className="text-6xl mb-4 drop-shadow-2xl z-10">{item.emg}</div>
-                   <div className="font-bold text-white z-10 text-center leading-tight text-sm">{item.название}</div>
+                   <div className="font-bold text-white z-10 text-center leading-tight text-sm">{getItemName(item)}</div>
                    <div className="text-xs text-slate-400 mt-1 font-mono z-10">#{item.serial.toString().padStart(4, '0')}</div>
                    <div className="mt-3 px-3 py-1 bg-black/40 rounded-full text-yellow-400 text-sm font-bold flex items-center gap-1 z-10 border border-yellow-500/20">
                       <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(getItemPrice(item))}
@@ -3197,15 +3545,20 @@ export default function App() {
         )}
 
         <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 backdrop-blur-sm sticky top-0 z-20">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <User className="w-6 h-6 text-slate-300" />
-            <div>
-              <h2 className="font-bold text-lg text-white">{playerProfile?.name || 'Профиль'}</h2>
+            <div className="min-w-0">
+              <h2 className="font-bold text-lg text-white truncate">{playerProfile?.name || 'Профиль'}</h2>
               <div className="text-[10px] text-slate-500 uppercase">{playerProfile?.id ? 'ID: ' + playerProfile.id.slice(0, 8) : ''}</div>
             </div>
           </div>
           
           <div className="flex items-center gap-2">
+            <div className="hidden sm:flex items-center gap-1">
+              <div className="text-[10px] text-slate-300 bg-slate-800 px-2 py-1 rounded">�: {formatMoney(playerProfile?.stats_cases_opened || 0)}</div>
+              <div className="text-[10px] text-red-300 bg-slate-800 px-2 py-1 rounded">- {formatMoney(playerProfile?.stats_total_spent || 0)}</div>
+              <div className="text-[10px] text-green-300 bg-slate-800 px-2 py-1 rounded">+ {formatMoney(playerProfile?.stats_total_won || 0)}</div>
+            </div>
              <button
                onClick={() => {
                  setInputName(playerProfile?.name || '');
@@ -3217,22 +3570,25 @@ export default function App() {
              >
                <Settings className="w-5 h-5" />
              </button>
-
-             {inventory.length > 0 && (
-                <button 
-                    onClick={() => setShowSellAllConfirm(true)}
-                    className="text-xs font-bold text-red-400 hover:text-red-300 bg-red-900/20 px-3 py-1.5 rounded-lg border border-red-900/50 flex items-center gap-2 transition-all active:scale-95 h-9"
-                >
-                    <Trash2 className="w-3 h-3" /> ПРОДАТЬ ВСЕ
-                </button>
-             )}
           </div>
         </div>
 
-        <div className="p-4 bg-slate-900 border-b border-slate-800 flex justify-between items-center shadow-md z-10">
+        <div className="p-4 bg-slate-900 border-b border-slate-800 grid grid-cols-3 gap-3 items-center shadow-md z-10">
           <div>
              <div className="text-xs text-slate-500 uppercase font-bold tracking-wider">Предметов</div>
              <div className="font-bold text-2xl text-white">{inventory.length}</div>
+          </div>
+          <div className="flex justify-center">
+            {inventory.length > 0 ? (
+              <button 
+                onClick={() => setShowSellAllConfirm(true)}
+                className="text-xs font-bold text-red-400 hover:text-red-300 bg-red-900/20 px-3 py-2 rounded-lg border border-red-900/50 flex items-center gap-2 transition-all active:scale-95"
+              >
+                <Trash2 className="w-3 h-3" /> ПРОДАТЬ ВСЕ
+              </button>
+            ) : (
+              <div className="text-xs text-slate-600">&nbsp;</div>
+            )}
           </div>
           <div className="text-right">
              <div className="text-xs text-slate-500 uppercase font-bold tracking-wider">Общая стоимость</div>
@@ -3296,6 +3652,30 @@ export default function App() {
     )
   }
 
+  if (isTelegramRequiredForOffer) {
+    const deepLink = initialOfferId && resolvedBotUsername
+      ? `https://t.me/${resolvedBotUsername}/app?startapp=${encodeURIComponent(encodeOfferStartParam(initialOfferId))}`
+      : '';
+    return (
+      <div className="min-h-screen bg-slate-950 text-white max-w-md mx-auto p-6 flex flex-col items-center justify-center text-center">
+        <div className="w-16 h-16 rounded-full bg-yellow-500/20 border border-yellow-500/40 flex items-center justify-center mb-4">
+          <AlertTriangle className="w-8 h-8 text-yellow-400" />
+        </div>
+        <h2 className="text-2xl font-bold mb-2">Откройте в Telegram</h2>
+        <p className="text-slate-400 text-sm mb-6">
+          Ссылки на товары работают только внутри Telegram WebApp.
+        </p>
+        {deepLink ? (
+          <Button onClick={() => window.location.assign(deepLink)} className="w-full max-w-xs">
+            Открыть в Telegram
+          </Button>
+        ) : (
+          <p className="text-xs text-slate-500">Не удалось определить имя бота для deep-link.</p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-hidden">
       
@@ -3303,7 +3683,20 @@ export default function App() {
       {showSettingsModal && renderSettingsModal()}
       {showCreateOfferModal && renderCreateOfferModal()}
 
-      {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && (
+      {screen !== AppScreen.ROULETTE &&
+        screen !== AppScreen.DROP_SUMMARY &&
+        screen !== AppScreen.CASE_LIST &&
+        screen !== AppScreen.CASE_DETAIL &&
+        screen !== AppScreen.ROCKET_MENU &&
+        screen !== AppScreen.ROCKET_GAME &&
+        screen !== AppScreen.UPGRADER_MENU &&
+        screen !== AppScreen.UPGRADER_SELECT_TARGET &&
+        screen !== AppScreen.UPGRADER_GAME &&
+        screen !== AppScreen.SLOTS_MENU &&
+        screen !== AppScreen.SLOTS_GAME &&
+        screen !== AppScreen.BUSINESS_MENU &&
+        screen !== AppScreen.MARKET_OFFER &&
+        screen !== AppScreen.PLAYER_PROFILE && (
         <Header balance={balance} />
       )}
 
@@ -3325,6 +3718,7 @@ export default function App() {
       {screen === AppScreen.DROP_SUMMARY && renderDropSummary()}
       {screen === AppScreen.PROFILE && renderProfile()}
       {screen === AppScreen.LEADERBOARD && renderLeaderboard()}
+      {screen === AppScreen.PLAYER_PROFILE && renderPlayerProfile()}
       
       {screen === AppScreen.ROCKET_MENU && renderRocketMenu()}
       {screen === AppScreen.ROCKET_GAME && renderRocketGame()}
@@ -3344,4 +3738,7 @@ export default function App() {
     </div>
   );
 }
+
+
+
 

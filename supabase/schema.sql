@@ -8,6 +8,9 @@ create table if not exists public.players (
   display_name text,
   is_public boolean not null default false,
   show_profile_link boolean not null default false,
+  stats_cases_opened bigint not null default 0,
+  stats_total_spent bigint not null default 0,
+  stats_total_won bigint not null default 0,
   balance bigint not null default 0,
   inventory_json jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
@@ -20,6 +23,9 @@ alter table public.players add column if not exists last_name text;
 alter table public.players add column if not exists display_name text;
 alter table public.players add column if not exists is_public boolean not null default false;
 alter table public.players add column if not exists show_profile_link boolean not null default false;
+alter table public.players add column if not exists stats_cases_opened bigint not null default 0;
+alter table public.players add column if not exists stats_total_spent bigint not null default 0;
+alter table public.players add column if not exists stats_total_won bigint not null default 0;
 alter table public.players add column if not exists balance bigint not null default 0;
 alter table public.players add column if not exists inventory_json jsonb not null default '[]'::jsonb;
 alter table public.players add column if not exists created_at timestamptz not null default now();

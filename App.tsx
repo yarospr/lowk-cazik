@@ -6,7 +6,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { supabase } from './supabaseClient';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r20';
+const BUILD_MARKER = 'v5069015-r21-db-recovery';
 const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || '').trim().replace(/^@/, '');
 const OFFER_ID_PREFIX = 'offer_';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
@@ -442,7 +442,7 @@ const parseOfferItem = (raw: MarketOfferDbRow['item_json']): InventoryItem | nul
 
   return {
     ...(baseItem ?? ({} as BaseItem)),
-    ...(record as InventoryItem),
+    ...(record as unknown as InventoryItem),
     uniqueId: typeof record.uniqueId === 'string' && record.uniqueId ? record.uniqueId : generateUUID(),
     serial: Math.max(1, Math.floor(toSafeNumber(record.serial) || generateSerial())),
     obtainedAt: Math.max(1, Math.floor(toSafeNumber(record.obtainedAt) || Date.now())),
@@ -1053,7 +1053,49 @@ export default function App() {
           .single();
 
         if (insertError) {
-          console.error('Failed to create player profile', insertError);
+          // A second initialization can race with the first one in React StrictMode.
+          // If another request created the same player, continue with that row.
+          if (insertError.code === '23505') {
+            const { data: existing, error: existingError } = await supabase
+              .from('players')
+              .select('*')
+              .eq('telegram_id', userId)
+              .maybeSingle();
+            if (!existingError && existing) {
+              row = existing as PlayerDbRow;
+            }
+          }
+
+          if (!row) {
+            console.error('Failed to create player profile', insertError);
+            setPlayerProfile({
+              id: userId,
+              name: tgUser?.first_name || '',
+              balance: INITIAL_BALANCE,
+              inventory: [],
+              telegram_id: isTg ? userId : undefined,
+              telegram_username: tgUser?.username,
+              is_public: false,
+              show_profile_link: false,
+              stats_cases_opened: 0,
+              stats_total_spent: 0,
+              stats_total_won: 0,
+            });
+            setBalance(INITIAL_BALANCE);
+            setInventory([]);
+            setInputName(tgUser?.first_name || '');
+            setInputIsPublic(isTg);
+            setInputShowProfileLink(isTg);
+            setShowWelcomeModal(true);
+            setIsLoaded(true);
+            return;
+          }
+        } else {
+          row = inserted as PlayerDbRow;
+        }
+
+        if (!row) {
+          console.error('Player profile initialization returned no row');
           setPlayerProfile({
             id: userId,
             name: tgUser?.first_name || '',
@@ -1076,8 +1118,6 @@ export default function App() {
           setIsLoaded(true);
           return;
         }
-
-        row = inserted as PlayerDbRow;
       }
 
       const profile = mapDbRowToProfile(row);

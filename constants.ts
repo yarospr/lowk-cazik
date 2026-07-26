@@ -3,7 +3,10 @@
 import { BaseItem, Case } from './types';
 
 // Start balance
-export const INITIAL_BALANCE = 0;
+const configuredInitialBalance = Number((import.meta as any).env?.VITE_DEFAULT_BALANCE ?? 0);
+export const INITIAL_BALANCE = Number.isFinite(configuredInitialBalance)
+  ? Math.max(0, Math.floor(configuredInitialBalance))
+  : 0;
 
 export const ITEMS_DATA: { [key: string]: BaseItem[] } = {
   "items_db": [
@@ -802,7 +805,7 @@ const RAW_CASES_DATA: Case[] = [
 ];
 
 const detectItemPriceKey = (): string => {
-  const sample = ITEMS_DATA["items_db"][0] as Record<string, unknown> | undefined;
+  const sample = ITEMS_DATA["items_db"][0] as unknown as Record<string, unknown> | undefined;
   if (!sample) return 'price';
 
   for (const [key, value] of Object.entries(sample)) {
@@ -817,7 +820,7 @@ const ITEM_PRICE_KEY = detectItemPriceKey();
 
 const ITEM_PRICE_BY_ID = new Map<number, number>(
   ITEMS_DATA["items_db"].map((item) => {
-    const record = item as Record<string, unknown>;
+    const record = item as unknown as Record<string, unknown>;
     const value = Number(record[ITEM_PRICE_KEY]);
     return [item.id, Number.isFinite(value) ? value : 0];
   })

@@ -8,6 +8,15 @@ Current version includes:
 - leaderboard
 - Telegram-based account binding (same Telegram account -> same player profile)
 
+## Database modes
+
+The app no longer contains hardcoded Supabase credentials. It selects the storage mode at build time:
+
+- With valid `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`, profiles, leaderboard and market use Supabase.
+- Without them, or if the configured service cannot be reached, the app falls back to a browser-local database. Profile and game progress persist on that device, while leaderboard and market are local to that browser.
+
+This fallback keeps the Mini App usable if the external database is missing or while a new Supabase project is being prepared.
+
 ## 1. Create Supabase table/migration
 
 1. Open Supabase -> `SQL Editor`.
@@ -40,9 +49,12 @@ VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 VITE_SUPABASE_ANON_KEY=YOUR_PUBLISHABLE_KEY
 VITE_DEFAULT_BALANCE=0
 VITE_TELEGRAM_BOT_USERNAME=YOUR_BOT_USERNAME_WITHOUT_AT
+VITE_FORCE_LOCAL_DB=0
 ```
 
 `VITE_TELEGRAM_BOT_USERNAME` is used to generate market links in format `https://t.me/<bot>/app?startapp=...` so they open directly in Telegram WebApp.
+
+Use `VITE_FORCE_LOCAL_DB=1` only for a deliberately local-only build. Never commit a `service_role` or secret key; the publishable/anon key is the only Supabase key allowed in the frontend.
 
 ## 4. Run
 

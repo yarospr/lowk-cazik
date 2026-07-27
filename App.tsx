@@ -1,13 +1,14 @@
 ﻿
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Menu, ChevronRight, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2 } from 'lucide-react';
+import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
-import { supabase } from './supabaseClient';
+import { gameDatabase } from './gameDatabase';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r21-db-recovery';
+const BUILD_MARKER = 'v5069015-r22-online-market';
 const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || '').trim().replace(/^@/, '');
+const TELEGRAM_APP_SHORT_NAME = (((import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME as string) || '').trim().replace(/^\//, '');
 const OFFER_ID_PREFIX = 'offer_';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
@@ -112,6 +113,49 @@ const getRarityGlow = (rarity: string) => {
     default: return 'shadow-none';
   }
 }
+
+const getItemImageUrl = (item: BaseItem): string => {
+  const record = item as unknown as Record<string, unknown>;
+  for (const key of ['image_url', 'image', 'img']) {
+    const value = record[key];
+    if (typeof value !== 'string' || !value.trim()) continue;
+    try {
+      const resolved = new URL(value.trim(), window.location.href);
+      if (resolved.protocol === 'http:' || resolved.protocol === 'https:') return resolved.toString();
+    } catch {
+      // Ignore malformed image sources and keep the emoji fallback.
+    }
+  }
+  return '';
+};
+
+const ItemArtwork = React.memo(({
+  item,
+  className = '',
+  imageClassName = '',
+}: {
+  item: BaseItem;
+  className?: string;
+  imageClassName?: string;
+}) => {
+  const imageUrl = getItemImageUrl(item);
+  return (
+    <div className={`flex items-center justify-center overflow-hidden ${className}`}>
+      {imageUrl ? (
+        <img
+          src={imageUrl}
+          alt=""
+          loading="eager"
+          decoding="async"
+          draggable={false}
+          className={`w-full h-full object-contain select-none ${imageClassName}`}
+        />
+      ) : (
+        <span aria-hidden="true">{item.emg}</span>
+      )}
+    </div>
+  );
+});
 
 const formatMoney = (amount: number) => {
   return new Intl.NumberFormat('ru-RU').format(Math.floor(amount));
@@ -319,6 +363,7 @@ type TelegramWebAppState = {
   };
   ready?: () => void;
   expand?: () => void;
+  openTelegramLink?: (url: string) => void;
 };
 
 type PlayerDbRow = {
@@ -338,6 +383,7 @@ type PlayerDbRow = {
 type OfferVisibility = 'PUBLIC' | 'LINK_ONLY';
 type OfferStatus = 'ACTIVE' | 'SOLD' | 'CANCELLED';
 type MarketViewTab = 'MARKET' | 'MY_OFFERS';
+type MarketSort = 'NEWEST' | 'PRICE_ASC' | 'PRICE_DESC';
 type StatsDelta = {
   casesOpened?: number;
   spent?: number;
@@ -400,6 +446,12 @@ const parseOfferStartParam = (raw: unknown): string | null => {
   if (value.startsWith(OFFER_ID_PREFIX)) return value;
   if (value.startsWith('o_')) return `${OFFER_ID_PREFIX}${value.slice(2)}`;
   return null;
+};
+
+const buildTelegramMiniAppUrl = (startParam: string) => {
+  if (!TELEGRAM_BOT_USERNAME) return '';
+  const appPath = TELEGRAM_APP_SHORT_NAME ? `/${TELEGRAM_APP_SHORT_NAME}` : '';
+  return `https://t.me/${TELEGRAM_BOT_USERNAME}${appPath}?startapp=${encodeURIComponent(startParam)}`;
 };
 
 const getOrCreateLocalPlayerId = (): string => {
@@ -558,26 +610,34 @@ const Header = ({ balance }: { balance: number }) => (
 const BottomNav = ({ activeTab, onTabChange }: { activeTab: string, onTabChange: (tab: string) => void }) => {
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 pb-safe pt-2 px-4 flex justify-around items-center z-50 max-w-md mx-auto">
-      <button 
+      <button
         onClick={() => onTabChange('games')}
+        aria-label="Игры"
+        title="Игры"
         className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all ${activeTab === 'games' ? 'text-yellow-400 bg-yellow-500/10' : 'text-slate-500 hover:text-slate-300'}`}
       >
         <Gamepad2 className="w-6 h-6" />
       </button>
-      <button 
+      <button
         onClick={() => onTabChange('leaderboard')}
+        aria-label="Рейтинг"
+        title="Рейтинг"
         className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all ${activeTab === 'leaderboard' ? 'text-yellow-400 bg-yellow-500/10' : 'text-slate-500 hover:text-slate-300'}`}
       >
         <Trophy className="w-6 h-6" />
       </button>
-      <button 
+      <button
         onClick={() => onTabChange('profile')}
+        aria-label="Профиль"
+        title="Профиль"
         className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all ${activeTab === 'profile' ? 'text-yellow-400 bg-yellow-500/10' : 'text-slate-500 hover:text-slate-300'}`}
       >
         <User className="w-6 h-6" />
       </button>
-      <button 
+      <button
         onClick={() => onTabChange('market')}
+        aria-label="Рынок"
+        title="Рынок"
         className={`p-3 rounded-xl flex flex-col items-center gap-1 transition-all ${activeTab === 'market' ? 'text-yellow-400 bg-yellow-500/10' : 'text-slate-500 hover:text-slate-300'}`}
       >
         <Banknote className="w-6 h-6" />
@@ -589,18 +649,37 @@ const BottomNav = ({ activeTab, onTabChange }: { activeTab: string, onTabChange:
 
 // --- ROULETTE COMPONENT ---
 
-const CARD_WIDTH_PX = 112;
-const MARGIN_PX = 4;
-const TOTAL_SLOT_WIDTH = CARD_WIDTH_PX + (MARGIN_PX * 2);
-const WINNER_INDEX = 40;
-const TOTAL_ITEMS_IN_STRIP = 60;
-
 type RouletteStripEntry = {
   item: BaseItem;
   chance: number;
 };
 
-const buildRouletteStrip = (caseData: Case, winner: BaseItem): RouletteStripEntry[] => {
+const getMarketRarityStyle = (rarity: string) => {
+  switch (rarity) {
+    case 'обычный': return { border: 'border-cyan-500/45', text: 'text-cyan-300', bg: 'bg-cyan-500/10' };
+    case 'редкий': return { border: 'border-emerald-500/45', text: 'text-emerald-300', bg: 'bg-emerald-500/10' };
+    case 'эпический': return { border: 'border-fuchsia-500/45', text: 'text-fuchsia-300', bg: 'bg-fuchsia-500/10' };
+    case 'мифический': return { border: 'border-rose-500/45', text: 'text-rose-300', bg: 'bg-rose-500/10' };
+    case 'легендарный': return { border: 'border-amber-400/55', text: 'text-amber-300', bg: 'bg-amber-400/10' };
+    default: return { border: 'border-slate-700', text: 'text-slate-400', bg: 'bg-slate-800/60' };
+  }
+};
+
+const formatMarketAge = (createdAt: string) => {
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - Date.parse(createdAt)) / 60_000));
+  if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 1) return 'сейчас';
+  if (elapsedMinutes < 60) return `${elapsedMinutes} мин`;
+  const hours = Math.floor(elapsedMinutes / 60);
+  if (hours < 24) return `${hours} ч`;
+  return `${Math.floor(hours / 24)} д`;
+};
+
+const buildRouletteStrip = (
+  caseData: Case,
+  winner: BaseItem,
+  totalItems: number,
+  winnerIndex: number,
+): RouletteStripEntry[] => {
   const itemChanceMap = new Map<number, number>();
   for (const drop of caseData.items) {
     itemChanceMap.set(drop.id, drop.chance_percent);
@@ -609,8 +688,8 @@ const buildRouletteStrip = (caseData: Case, winner: BaseItem): RouletteStripEntr
   const winnerChance = itemChanceMap.get(winner.id) ?? 0;
   const strip: RouletteStripEntry[] = [];
 
-  for (let i = 0; i < TOTAL_ITEMS_IN_STRIP; i += 1) {
-    if (i === WINNER_INDEX) {
+  for (let i = 0; i < totalItems; i += 1) {
+    if (i === winnerIndex) {
       strip.push({ item: winner, chance: winnerChance });
       continue;
     }
@@ -624,8 +703,27 @@ const buildRouletteStrip = (caseData: Case, winner: BaseItem): RouletteStripEntr
   return strip;
 };
 
-const Roulette: React.FC<{ caseData: Case, winner: BaseItem, onComplete: () => void }> = React.memo(({ caseData, winner, onComplete }) => {
-  const [strip] = useState<RouletteStripEntry[]>(() => buildRouletteStrip(caseData, winner));
+const isLowPowerDevice = () => {
+  const memory = Number((navigator as Navigator & { deviceMemory?: number }).deviceMemory || 8);
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || navigator.hardwareConcurrency <= 4
+    || memory <= 4;
+};
+
+const Roulette: React.FC<{
+  caseData: Case;
+  winner: BaseItem;
+  compact: boolean;
+  lowPower: boolean;
+  durationMs: number;
+  index: number;
+  settled: boolean;
+}> = React.memo(({ caseData, winner, compact, lowPower, durationMs, index, settled }) => {
+  const cardWidth = compact ? 72 : 104;
+  const gap = compact ? 6 : 8;
+  const totalItems = lowPower ? (compact ? 8 : 15) : (compact ? 10 : 22);
+  const winnerIndex = totalItems - (compact ? 3 : 5);
+  const [strip] = useState<RouletteStripEntry[]>(() => buildRouletteStrip(caseData, winner, totalItems, winnerIndex));
   const [isSpinning, setIsSpinning] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [finalTranslate, setFinalTranslate] = useState(0);
@@ -633,90 +731,149 @@ const Roulette: React.FC<{ caseData: Case, winner: BaseItem, onComplete: () => v
   useEffect(() => {
     const containerWidth = containerRef.current?.getBoundingClientRect().width || window.innerWidth;
     const containerCenter = containerWidth / 2;
-    const winnerCenterPosition = (WINNER_INDEX * TOTAL_SLOT_WIDTH) + (TOTAL_SLOT_WIDTH / 2);
-    const jitter = (Math.random() * (CARD_WIDTH_PX * 0.7)) - (CARD_WIDTH_PX * 0.35);
+    const slotWidth = cardWidth + gap;
+    const winnerCenterPosition = (winnerIndex * slotWidth) + (cardWidth / 2);
+    const jitter = (Math.random() * cardWidth * 0.36) - (cardWidth * 0.18);
     const translate = containerCenter - winnerCenterPosition + jitter;
 
     setFinalTranslate(translate);
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => setIsSpinning(true));
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [cardWidth, gap, winnerIndex]);
 
-    const timer = window.setTimeout(() => setIsSpinning(true), 100);
-    return () => window.clearTimeout(timer);
-  }, []);
+  const winnerRarity = getItemRarity(winner);
 
   return (
-    <div ref={containerRef} className="relative w-full h-44 bg-slate-950 overflow-hidden border-y-4 border-yellow-500 shadow-2xl mb-4 rounded-lg flex-shrink-0">
-      <div className="absolute left-1/2 top-0 bottom-0 w-1 bg-yellow-400 z-20 shadow-[0_0_15px_rgba(250,204,21,1)] -translate-x-1/2" />
-      <div className="absolute left-1/2 top-0 -translate-x-1/2 z-20 text-yellow-400 text-2xl drop-shadow-lg">▼</div>
-
+    <div className={`relative min-w-0 ${compact ? 'h-[92px]' : 'h-40'}`}>
+      <div className="absolute left-2 top-1.5 z-20 flex items-center gap-1.5 text-[9px] font-bold text-slate-400">
+        <span className="text-amber-300 font-mono">{String(index + 1).padStart(2, '0')}</span>
+        <span className="uppercase">reel</span>
+      </div>
       <div
-        className="flex h-full items-center absolute left-0 will-change-transform"
-        style={{
-          transform: `translate3d(${isSpinning ? finalTranslate : 0}px, 0, 0)`,
-          transition: 'transform 4s cubic-bezier(0.1, 0.85, 0.1, 1)',
-        }}
-        onTransitionEnd={onComplete}
+        ref={containerRef}
+        className={`roulette-viewport relative w-full h-full overflow-hidden bg-[#0b0d10] border transition-colors duration-300 ${settled ? getRarityColor(winnerRarity).split(' ').find(value => value.startsWith('border-')) : 'border-slate-800'} rounded-lg`}
       >
-        {strip.map(({ item, chance }, idx) => {
-           const cardStyle = getRouletteCardStyle(getItemRarity(item));
+        <div className="absolute left-1/2 top-0 bottom-0 w-px bg-amber-300 z-20 -translate-x-1/2 shadow-[0_0_10px_rgba(252,211,77,0.85)]" />
+        <div className="absolute left-1/2 top-0 -translate-x-1/2 z-20 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[7px] border-l-transparent border-r-transparent border-t-amber-300" />
 
-           return (
+        <div
+          className="roulette-track flex h-full items-center absolute left-0"
+          style={{
+            gap: `${gap}px`,
+            paddingLeft: `${gap}px`,
+            transform: `translate3d(${isSpinning ? finalTranslate : 0}px, 0, 0)`,
+            transition: `transform ${durationMs}ms cubic-bezier(0.08, 0.72, 0.12, 1)`,
+          }}
+        >
+          {strip.map(({ item, chance }, itemIndex) => {
+            const rarity = getItemRarity(item);
+            const isWinner = itemIndex === winnerIndex;
+
+            return (
             <div
-              key={idx}
-              className={`flex-shrink-0 flex flex-col items-center justify-between p-2 relative shadow-lg rounded-lg border-4 ${cardStyle}`}
+              key={`${item.id}-${itemIndex}`}
+              className={`roulette-card flex-shrink-0 flex flex-col items-center justify-between relative border bg-[#15191f] ${isWinner && settled ? `${getRarityColor(rarity)} scale-[1.03]` : 'border-slate-700/80 text-white'} rounded-md`}
               style={{
-                width: `${CARD_WIDTH_PX}px`,
-                height: '140px',
-                marginLeft: `${MARGIN_PX}px`,
-                marginRight: `${MARGIN_PX}px`
+                width: `${cardWidth}px`,
+                height: compact ? '68px' : '124px',
               }}
             >
-              <div className="text-[10px] font-bold opacity-90 w-full text-right bg-black/20 px-1 rounded">{chance.toFixed(2)}%</div>
-              <div className="text-5xl drop-shadow-xl my-auto">{item.emg}</div>
-              <div className="w-full text-[9px] text-center leading-tight font-black bg-black/30 rounded px-1 py-1 text-white uppercase">
+              {!compact && <div className="text-[9px] text-slate-500 w-full text-right px-1.5 pt-1">{chance.toFixed(2)}%</div>}
+              <ItemArtwork item={item} className={compact ? 'text-3xl w-10 h-10 mt-3' : 'text-5xl w-16 h-16'} />
+              <div className={`w-full text-center leading-tight font-bold text-slate-200 truncate ${compact ? 'text-[8px] px-1 pb-1' : 'text-[9px] px-1.5 pb-2'}`}>
                 {getItemName(item)}
               </div>
             </div>
-           );
-        })}
-      </div>
+            );
+          })}
+        </div>
 
-      <div className="absolute inset-y-0 left-0 w-12 bg-gradient-to-r from-slate-950 to-transparent z-10 pointer-events-none" />
-      <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-slate-950 to-transparent z-10 pointer-events-none" />
+        <div className="absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-[#0b0d10] to-transparent z-10 pointer-events-none" />
+        <div className="absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-[#0b0d10] to-transparent z-10 pointer-events-none" />
+      </div>
     </div>
   );
 });
 
-const NOOP = () => {};
-
-const RouletteScreen = ({ 
-  selectedCase, 
-  droppedItems, 
-  onComplete 
-}: { 
-  selectedCase: Case, 
-  droppedItems: InventoryItem[], 
-  onComplete: () => void 
+const RouletteScreen = ({
+  selectedCase,
+  droppedItems,
+  onComplete
+}: {
+  selectedCase: Case,
+  droppedItems: InventoryItem[],
+  onComplete: () => void
 }) => {
-  
+  const [settled, setSettled] = useState(false);
+  const completedRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  const [lowPower] = useState(isLowPowerDevice);
+  const compact = droppedItems.length > 1;
+  const durationMs = lowPower ? 1450 : (compact ? 2200 : 2850);
+
   useEffect(() => {
-     const timer = setTimeout(() => {
-       onComplete();
-     }, 4500); 
-     return () => clearTimeout(timer);
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  const finish = useCallback(() => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    onCompleteRef.current();
   }, []);
 
+  useEffect(() => {
+    const settleTimer = window.setTimeout(() => setSettled(true), durationMs + 80);
+    const finishTimer = window.setTimeout(finish, durationMs + (lowPower ? 360 : 720));
+    return () => {
+      window.clearTimeout(settleTimer);
+      window.clearTimeout(finishTimer);
+    };
+  }, [durationMs, finish, lowPower]);
+
   return (
-      <div className="flex flex-col h-screen bg-slate-950 overflow-hidden">
-        <div className="p-6 text-center sticky top-0 bg-slate-900/90 z-20 backdrop-blur border-b border-slate-800">
-           <h2 className="text-2xl font-black text-white uppercase tracking-widest animate-pulse">Открытие...</h2>
+      <div className="flex flex-col h-screen bg-[#080a0d] overflow-hidden">
+        <div className="px-4 pt-4 pb-3 bg-[#101318] z-20 border-b border-slate-800">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-md border border-amber-400/30 bg-amber-400/10 flex items-center justify-center">
+                <PackageOpen className="w-5 h-5 text-amber-300" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] text-amber-300 font-bold uppercase">Распаковка</div>
+                <h2 className="text-base font-bold text-white truncate">{selectedCase.name}</h2>
+              </div>
+            </div>
+            <button
+              onClick={finish}
+              className="h-9 px-3 flex items-center gap-1.5 text-xs font-bold text-slate-300 border border-slate-700 rounded-md hover:bg-slate-800"
+            >
+              <SkipForward className="w-4 h-4" />
+              Пропустить
+            </button>
+          </div>
+          <div className="mt-3 flex items-center gap-3 text-[10px] text-slate-500">
+            <span>{`${droppedItems.length} ${droppedItems.length === 1 ? 'кейс' : 'кейсов'}`}</span>
+            <span className="w-1 h-1 rounded-full bg-slate-600" />
+            <span>{lowPower ? 'экономичный режим' : 'плавная прокрутка'}</span>
+          </div>
         </div>
-        <div className="flex-1 flex flex-col items-center gap-4 p-4 pb-20 overflow-y-auto custom-scrollbar w-full">
-           {droppedItems.map((item) => (
-             <Roulette 
-                key={item.uniqueId} 
-                caseData={selectedCase} 
-                winner={item} 
-                onComplete={NOOP} 
+        <div className={`flex-1 p-3 pb-6 overflow-y-auto custom-scrollbar w-full ${compact ? 'grid grid-cols-2 content-start gap-2' : 'flex flex-col justify-center'}`}>
+           {droppedItems.map((item, index) => (
+             <Roulette
+                key={item.uniqueId}
+                caseData={selectedCase}
+                winner={item}
+                compact={compact}
+                lowPower={lowPower}
+                durationMs={durationMs}
+                index={index}
+                settled={settled}
              />
            ))}
         </div>
@@ -827,6 +984,8 @@ export default function App() {
   // Market State
   const [marketOffers, setMarketOffers] = useState<MarketOffer[]>([]);
   const [marketTabView, setMarketTabView] = useState<MarketViewTab>('MARKET');
+  const [marketSearch, setMarketSearch] = useState('');
+  const [marketSort, setMarketSort] = useState<MarketSort>('NEWEST');
   const [isLoadingMarket, setIsLoadingMarket] = useState(false);
   const [selectedMarketOffer, setSelectedMarketOffer] = useState<MarketOffer | null>(null);
   const [isBuyingMarketOffer, setIsBuyingMarketOffer] = useState(false);
@@ -838,7 +997,6 @@ export default function App() {
   const [createdOfferLink, setCreatedOfferLink] = useState<string | null>(null);
   const [isPublishingOffer, setIsPublishingOffer] = useState(false);
   const [isCancellingOffer, setIsCancellingOffer] = useState(false);
-  const [runtimeBotUsername, setRuntimeBotUsername] = useState('');
   const [isTelegramRequiredForOffer, setIsTelegramRequiredForOffer] = useState(false);
   const pendingOfferIdRef = useRef<string | null>(null);
   const didHandleInitialOfferRef = useRef(false);
@@ -915,11 +1073,6 @@ export default function App() {
     return { valueById, total };
   }, [inventory]);
 
-  const resolvedBotUsername = useMemo(() => {
-    if (TELEGRAM_BOT_USERNAME) return TELEGRAM_BOT_USERNAME;
-    return runtimeBotUsername.trim().replace(/^@/, '');
-  }, [runtimeBotUsername]);
-
   const selectedSellValue = useMemo(() => {
     if (selectedInventoryIds.size === 0) return 0;
     let total = 0;
@@ -928,6 +1081,17 @@ export default function App() {
     }
     return total;
   }, [inventoryValueById, selectedInventoryIds]);
+
+  const visibleMarketOffers = useMemo(() => {
+    const query = marketSearch.trim().toLocaleLowerCase('ru-RU');
+    const filtered = query
+      ? marketOffers.filter(offer => [getItemName(offer.item), offer.description, offer.seller_name]
+          .some(value => value.toLocaleLowerCase('ru-RU').includes(query)))
+      : [...marketOffers];
+    if (marketSort === 'PRICE_ASC') filtered.sort((left, right) => left.price - right.price);
+    if (marketSort === 'PRICE_DESC') filtered.sort((left, right) => right.price - left.price);
+    return filtered;
+  }, [marketOffers, marketSearch, marketSort]);
 
   const selectedSingleInventoryItem = useMemo(() => {
     if (selectedInventoryIds.size !== 1) return null;
@@ -1008,8 +1172,6 @@ export default function App() {
       tg?.ready?.();
       tg?.expand?.();
       const tgUser = tg?.initDataUnsafe?.user;
-      const tgChatUsername = tg?.initDataUnsafe?.chat?.username || '';
-      setRuntimeBotUsername(String(tgChatUsername || '').trim().replace(/^@/, ''));
       const isTg = Boolean(tgUser?.id);
       setIsTelegramUser(isTg);
       if (initialOfferId && !isTg) {
@@ -1020,82 +1182,25 @@ export default function App() {
       setIsTelegramRequiredForOffer(false);
       const userId = isTg ? String(tgUser?.id) : getOrCreateLocalPlayerId();
 
-      const { data, error } = await supabase
-        .from('players')
-        .select('*')
-        .eq('telegram_id', userId)
-        .maybeSingle();
+      const insertPayload: PlayerDbRow = {
+        telegram_id: userId,
+        username: tgUser?.username || null,
+        first_name: tgUser?.first_name || null,
+        balance: INITIAL_BALANCE,
+        inventory_json: [],
+        display_name: '',
+        is_public: isTg,
+        show_profile_link: isTg,
+        stats_cases_opened: 0,
+        stats_total_spent: 0,
+        stats_total_won: 0,
+      };
 
-      if (error) {
-        console.error('Failed to fetch player profile', error);
-      }
-
-      let row: PlayerDbRow | null = data as PlayerDbRow | null;
-      if (!row) {
-        const insertPayload: PlayerDbRow = {
-          telegram_id: userId,
-          username: tgUser?.username || null,
-          first_name: tgUser?.first_name || null,
-          balance: INITIAL_BALANCE,
-          inventory_json: [],
-          display_name: '',
-          is_public: isTg,
-          show_profile_link: isTg,
-          stats_cases_opened: 0,
-          stats_total_spent: 0,
-          stats_total_won: 0,
-        };
-
-        const { data: inserted, error: insertError } = await supabase
-          .from('players')
-          .insert(insertPayload)
-          .select('*')
-          .single();
-
-        if (insertError) {
-          // A second initialization can race with the first one in React StrictMode.
-          // If another request created the same player, continue with that row.
-          if (insertError.code === '23505') {
-            const { data: existing, error: existingError } = await supabase
-              .from('players')
-              .select('*')
-              .eq('telegram_id', userId)
-              .maybeSingle();
-            if (!existingError && existing) {
-              row = existing as PlayerDbRow;
-            }
-          }
-
-          if (!row) {
-            console.error('Failed to create player profile', insertError);
-            setPlayerProfile({
-              id: userId,
-              name: tgUser?.first_name || '',
-              balance: INITIAL_BALANCE,
-              inventory: [],
-              telegram_id: isTg ? userId : undefined,
-              telegram_username: tgUser?.username,
-              is_public: false,
-              show_profile_link: false,
-              stats_cases_opened: 0,
-              stats_total_spent: 0,
-              stats_total_won: 0,
-            });
-            setBalance(INITIAL_BALANCE);
-            setInventory([]);
-            setInputName(tgUser?.first_name || '');
-            setInputIsPublic(isTg);
-            setInputShowProfileLink(isTg);
-            setShowWelcomeModal(true);
-            setIsLoaded(true);
-            return;
-          }
-        } else {
-          row = inserted as PlayerDbRow;
-        }
-
-        if (!row) {
-          console.error('Player profile initialization returned no row');
+      let row: PlayerDbRow;
+      try {
+        row = await gameDatabase.getOrCreatePlayer(userId, insertPayload) as PlayerDbRow;
+      } catch (error) {
+          console.error('Failed to initialize player profile', error);
           setPlayerProfile({
             id: userId,
             name: tgUser?.first_name || '',
@@ -1117,7 +1222,6 @@ export default function App() {
           setShowWelcomeModal(true);
           setIsLoaded(true);
           return;
-        }
       }
 
       const profile = mapDbRowToProfile(row);
@@ -1267,18 +1371,17 @@ export default function App() {
     if (!isLoaded || !playerProfile) return;
 
     const timer = setTimeout(async () => {
-      const { error } = await supabase
-        .from('players')
-        .update({
+      try {
+        await gameDatabase.syncPlayer(playerProfile.id, {
           balance: balance,
           inventory_json: inventory,
           stats_cases_opened: playerProfile.stats_cases_opened,
           stats_total_spent: playerProfile.stats_total_spent,
           stats_total_won: playerProfile.stats_total_won,
-        })
-        .eq('telegram_id', playerProfile.id);
-      
-      if (error) console.error('Error syncing:', error);
+        });
+      } catch (error) {
+        console.error('Error syncing:', error);
+      }
     }, 800);
 
     return () => clearTimeout(timer);
@@ -1309,13 +1412,10 @@ export default function App() {
       updatePayload.show_profile_link = inputShowProfileLink;
     }
 
-    const { error } = await supabase
-      .from('players')
-      .update(updatePayload)
-      .eq('telegram_id', playerProfile.id);
-
-    if (error) {
-      alert("Ошибка регистрации: " + error.message);
+    try {
+      await gameDatabase.updateProfile(playerProfile.id, updatePayload);
+    } catch (error) {
+      alert("Ошибка регистрации: " + (error instanceof Error ? error.message : 'неизвестная ошибка'));
       return;
     }
 
@@ -1348,29 +1448,19 @@ export default function App() {
        updatePayload.show_profile_link = inputShowProfileLink;
      }
 
-     const { error } = await supabase
-        .from('players')
-        .update(updatePayload)
-        .eq('telegram_id', playerProfile.id);
-      
-      if (error) {
-        alert("Ошибка сохранения: " + error.message);
-      } else {
+      try {
+        await gameDatabase.updateProfile(playerProfile.id, updatePayload);
         setPlayerProfile(updated);
         setShowSettingsModal(false);
+      } catch (error) {
+        alert("Ошибка сохранения: " + (error instanceof Error ? error.message : 'неизвестная ошибка'));
       }
   };
 
   const fetchLeaderboard = async () => {
     setIsLoadingLeaderboard(true);
-    const { data, error } = await supabase
-      .from('players')
-      .select('*')
-      .eq('is_public', true)
-      .order('balance', { ascending: false })
-      .limit(10);
-    
-    if (!error && data) {
+    try {
+      const data = await gameDatabase.getLeaderboard();
       const mapped = (data as PlayerDbRow[]).map((row) => {
         const profile = mapDbRowToProfile(row);
         profile.telegram_id = row.telegram_id;
@@ -1378,8 +1468,11 @@ export default function App() {
         return profile;
       });
       setLeaderboard(mapped);
+    } catch (error) {
+      console.error('Failed to load leaderboard', error);
+    } finally {
+      setIsLoadingLeaderboard(false);
     }
-    setIsLoadingLeaderboard(false);
   };
 
   const openPlayerProfileById = useCallback(async (playerId: string) => {
@@ -1387,14 +1480,12 @@ export default function App() {
     if (!normalizedPlayerId) return;
 
     setIsLoadingPlayerProfile(true);
-    const { data, error } = await supabase
-      .from('players')
-      .select('*')
-      .eq('telegram_id', normalizedPlayerId)
-      .maybeSingle();
-
-    if (error || !data) {
+    const data = await gameDatabase.getPlayer(normalizedPlayerId).catch(error => {
       console.error('Failed to load player profile', error);
+      return null;
+    });
+
+    if (!data) {
       setIsLoadingPlayerProfile(false);
       return;
     }
@@ -1412,15 +1503,15 @@ export default function App() {
     const normalizedOfferId = normalizeOfferId(offerId);
     if (!normalizedOfferId) return '';
 
-    if (resolvedBotUsername) {
+    if (TELEGRAM_BOT_USERNAME) {
       const startParam = encodeOfferStartParam(normalizedOfferId);
-      return `https://t.me/${resolvedBotUsername}/app?startapp=${encodeURIComponent(startParam)}`;
+      return buildTelegramMiniAppUrl(startParam);
     }
 
     const url = new URL(`${window.location.origin}${window.location.pathname}`);
     url.searchParams.set('offer', normalizedOfferId);
     return url.toString();
-  }, [resolvedBotUsername]);
+  }, []);
 
   const copyText = useCallback(async (text: string) => {
     try {
@@ -1434,55 +1525,29 @@ export default function App() {
   const fetchMarketOffers = useCallback(async (view: MarketViewTab = marketTabView) => {
     setIsLoadingMarket(true);
     const currentPlayerId = String(playerProfile?.id || '').trim();
-
-    let query = supabase
-      .from('market_offers')
-      .select('*')
-      .eq('status', 'ACTIVE');
-
     if (view === 'MY_OFFERS') {
       if (!currentPlayerId) {
         setMarketOffers([]);
         setIsLoadingMarket(false);
         return;
       }
-      query = query.eq('seller_telegram_id', currentPlayerId);
-    } else {
-      query = query.eq('visibility', 'PUBLIC');
-      if (currentPlayerId) {
-        query = query.neq('seller_telegram_id', currentPlayerId);
-      }
     }
 
-    const { data, error } = await query
-      .order('created_at', { ascending: false })
-      .limit(100);
-
-    if (error || !data) {
+    let result: { offers: Record<string, unknown>[]; sellers: Record<string, unknown>[] };
+    try {
+      result = await gameDatabase.listMarketOffers(view, currentPlayerId);
+    } catch (error) {
       console.error('Failed to fetch market offers', error);
       setIsLoadingMarket(false);
       return;
     }
 
-    const rows = data as MarketOfferDbRow[];
-    const sellerIds = Array.from(
-      new Set(rows.map(row => String(row.seller_telegram_id || '')).filter(Boolean))
-    );
+    const rows = result.offers as MarketOfferDbRow[];
     const sellersById = new Map<string, PlayerDbRow>();
-
-    if (sellerIds.length > 0) {
-      const { data: sellerRows, error: sellerError } = await supabase
-        .from('players')
-        .select('telegram_id, username, first_name, display_name, is_public, show_profile_link')
-        .in('telegram_id', sellerIds);
-
-      if (!sellerError && sellerRows) {
-        for (const row of sellerRows as PlayerDbRow[]) {
-          const id = String(row.telegram_id || '');
-          if (!id) continue;
-          sellersById.set(id, row);
-        }
-      }
+    for (const row of result.sellers as PlayerDbRow[]) {
+      const id = String(row.telegram_id || '');
+      if (!id) continue;
+      sellersById.set(id, row);
     }
 
     const mapped = rows
@@ -1493,30 +1558,20 @@ export default function App() {
   }, [marketTabView, playerProfile?.id]);
 
   const fetchSingleOffer = useCallback(async (offerId: string) => {
-    const { data, error } = await supabase
-      .from('market_offers')
-      .select('*')
-      .eq('offer_id', offerId)
-      .maybeSingle();
-
-    if (error || !data) {
+    let result: { offer: Record<string, unknown> | null; seller: Record<string, unknown> | null };
+    try {
+      result = await gameDatabase.getMarketOffer(offerId);
+    } catch (error) {
       console.error('Failed to fetch market offer', error);
       return null;
     }
+    if (!result.offer) return null;
 
-    const offerRow = data as MarketOfferDbRow;
+    const offerRow = result.offer as MarketOfferDbRow;
     const sellerId = String(offerRow.seller_telegram_id || '');
     const sellersById = new Map<string, PlayerDbRow>();
-
-    if (sellerId) {
-      const { data: seller, error: sellerError } = await supabase
-        .from('players')
-        .select('telegram_id, username, first_name, display_name, is_public, show_profile_link')
-        .eq('telegram_id', sellerId)
-        .maybeSingle();
-      if (!sellerError && seller) {
-        sellersById.set(sellerId, seller as PlayerDbRow);
-      }
+    if (sellerId && result.seller) {
+      sellersById.set(sellerId, result.seller as PlayerDbRow);
     }
 
     return mapOfferRow(offerRow, sellersById);
@@ -1586,9 +1641,10 @@ export default function App() {
       status: 'ACTIVE',
     };
 
-    const { error } = await supabase.from('market_offers').insert(payload);
-    if (error) {
-      alert(`Ошибка публикации: ${error.message}`);
+    try {
+      await gameDatabase.createMarketOffer(payload);
+    } catch (error) {
+      alert(`Ошибка публикации: ${error instanceof Error ? error.message : 'неизвестная ошибка'}`);
       setIsPublishingOffer(false);
       return;
     }
@@ -1616,16 +1672,10 @@ export default function App() {
     if (offer.seller_telegram_id !== playerProfile.id) return;
 
     setIsCancellingOffer(true);
-    const { data: cancelled, error } = await supabase
-      .from('market_offers')
-      .update({ status: 'CANCELLED' })
-      .eq('offer_id', offer.offer_id)
-      .eq('seller_telegram_id', playerProfile.id)
-      .eq('status', 'ACTIVE')
-      .select('*')
-      .maybeSingle();
-
-    if (error || !cancelled) {
+    try {
+      await gameDatabase.cancelMarketOffer(offer.offer_id, playerProfile.id);
+    } catch (error) {
+      console.error('Failed to cancel market offer', error);
       alert('Не удалось снять товар с продажи');
       setIsCancellingOffer(false);
       await fetchMarketOffers(marketTabView);
@@ -1671,52 +1721,26 @@ export default function App() {
     }
 
     setIsBuyingMarketOffer(true);
-    const soldAt = new Date().toISOString();
-
-    const { data: claimed, error: claimError } = await supabase
-      .from('market_offers')
-      .update({
-        status: 'SOLD',
-        buyer_telegram_id: buyerId,
-        sold_at: soldAt,
-      })
-      .eq('offer_id', selectedMarketOffer.offer_id)
-      .eq('status', 'ACTIVE')
-      .select('*')
-      .maybeSingle();
-
-    if (claimError || !claimed) {
-      alert('Товар уже куплен другим игроком');
+    let purchase: { offer: Record<string, unknown>; buyer: Record<string, unknown> };
+    try {
+      purchase = await gameDatabase.buyMarketOffer(selectedMarketOffer.offer_id, buyerId);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Товар уже куплен другим игроком');
       setIsBuyingMarketOffer(false);
       await fetchMarketOffers(marketTabView);
       return;
     }
 
-    setBalance(prev => prev - selectedMarketOffer.price);
-    applyStatsDelta({ spent: selectedMarketOffer.price });
-    setInventory(prev => {
-      const exists = prev.some(item => item.uniqueId === selectedMarketOffer.item.uniqueId);
-      if (exists) return prev;
-      return [selectedMarketOffer.item, ...prev];
-    });
-
-    const { data: seller, error: sellerError } = await supabase
-      .from('players')
-      .select('balance, stats_total_won')
-      .eq('telegram_id', selectedMarketOffer.seller_telegram_id)
-      .maybeSingle();
-
-    if (!sellerError && seller) {
-      const sellerBalance = Math.floor(toSafeNumber((seller as PlayerDbRow).balance));
-      const sellerTotalWon = Math.floor(toSafeNumber((seller as PlayerDbRow).stats_total_won));
-      await supabase
-        .from('players')
-        .update({
-          balance: sellerBalance + selectedMarketOffer.price,
-          stats_total_won: sellerTotalWon + selectedMarketOffer.price,
-        })
-        .eq('telegram_id', selectedMarketOffer.seller_telegram_id);
-    }
+    const buyerProfile = mapDbRowToProfile(purchase.buyer as PlayerDbRow);
+    setBalance(buyerProfile.balance);
+    setInventory(buyerProfile.inventory);
+    setPlayerProfile(prev => prev ? {
+      ...prev,
+      balance: buyerProfile.balance,
+      inventory: buyerProfile.inventory,
+      stats_total_spent: buyerProfile.stats_total_spent,
+      stats_total_won: buyerProfile.stats_total_won,
+    } : prev);
 
     setSelectedMarketOffer(prev => {
       if (!prev) return prev;
@@ -1724,7 +1748,7 @@ export default function App() {
         ...prev,
         status: 'SOLD',
         buyer_telegram_id: buyerId,
-        sold_at: soldAt,
+        sold_at: String((purchase.offer as MarketOfferDbRow).sold_at || new Date().toISOString()),
       };
     });
 
@@ -1739,7 +1763,7 @@ export default function App() {
       setActiveTab('market');
       marketReturnTimerRef.current = null;
     }, 1000);
-  }, [selectedMarketOffer, playerProfile, balance, fetchMarketOffers, marketTabView, applyStatsDelta]);
+  }, [selectedMarketOffer, playerProfile, balance, fetchMarketOffers, marketTabView]);
 
   useEffect(() => {
     if (screen !== AppScreen.MARKET_MENU) return;
@@ -2639,6 +2663,216 @@ export default function App() {
           ) : (
             <Button onClick={handleBuySelectedOffer} disabled={!canBuy || isBuyingMarketOffer} className="w-full py-4 text-lg">
               {isBuyingMarketOffer ? 'Покупка...' : (canBuy ? 'Купить' : 'Недостаточно звезд')}
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderMarketMenuV2 = () => (
+    <div className="flex flex-col h-full bg-[#0b0d10]">
+      <div className="px-4 pt-4 pb-3 bg-[#111419] border-b border-slate-800 sticky top-0 z-10">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-md bg-emerald-400/10 border border-emerald-400/30 flex items-center justify-center">
+              <Store className="w-5 h-5 text-emerald-300" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-white">Рынок</h2>
+              <div className="text-[10px] text-slate-500">{`${marketOffers.length} активных предложений`}</div>
+            </div>
+          </div>
+          <button
+            onClick={() => fetchMarketOffers(marketTabView)}
+            className="w-9 h-9 inline-flex items-center justify-center text-slate-400 border border-slate-700 rounded-md hover:text-white hover:bg-slate-800 disabled:opacity-50"
+            disabled={isLoadingMarket}
+            title="Обновить предложения"
+            aria-label="Обновить предложения"
+          >
+            <RefreshCw className={`w-4 h-4 ${isLoadingMarket ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-1 bg-[#090b0e] border border-slate-800 p-1 rounded-lg">
+          <button
+            onClick={() => setMarketTabView('MARKET')}
+            className={`h-9 text-xs font-bold rounded-md transition-colors ${marketTabView === 'MARKET' ? 'bg-emerald-400 text-[#07100c]' : 'text-slate-400 hover:text-white'}`}
+          >
+            Все лоты
+          </button>
+          <button
+            onClick={() => setMarketTabView('MY_OFFERS')}
+            className={`h-9 text-xs font-bold rounded-md transition-colors ${marketTabView === 'MY_OFFERS' ? 'bg-emerald-400 text-[#07100c]' : 'text-slate-400 hover:text-white'}`}
+          >
+            Мои лоты
+          </button>
+        </div>
+
+        <div className="mt-2 grid grid-cols-[1fr_112px] gap-2">
+          <label className="h-10 flex items-center gap-2 px-3 bg-[#090b0e] border border-slate-800 rounded-md focus-within:border-emerald-500/60">
+            <Search className="w-4 h-4 text-slate-500 flex-shrink-0" />
+            <input
+              type="search"
+              value={marketSearch}
+              onChange={(event) => setMarketSearch(event.target.value)}
+              placeholder="Поиск"
+              className="min-w-0 w-full bg-transparent outline-none text-xs text-white placeholder:text-slate-600"
+            />
+          </label>
+          <select
+            value={marketSort}
+            onChange={(event) => setMarketSort(event.target.value as MarketSort)}
+            className="h-10 px-2 bg-[#090b0e] border border-slate-800 rounded-md text-[11px] font-bold text-slate-300 outline-none focus:border-emerald-500/60"
+            aria-label="Сортировка рынка"
+          >
+            <option value="NEWEST">Новые</option>
+            <option value="PRICE_ASC">Дешевле</option>
+            <option value="PRICE_DESC">Дороже</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="p-3 pb-24 overflow-y-auto custom-scrollbar">
+        {isLoadingMarket && marketOffers.length === 0 ? (
+          <div className="py-20 flex justify-center text-emerald-300"><Loader2 className="w-7 h-7 animate-spin" /></div>
+        ) : visibleMarketOffers.length === 0 ? (
+          <div className="text-center py-20 text-slate-500">
+            <Store className="w-10 h-10 mx-auto mb-3 text-slate-700" />
+            <div className="text-sm font-bold text-slate-400">
+              {marketSearch ? 'Ничего не найдено' : marketTabView === 'MY_OFFERS' ? 'Нет активных лотов' : 'Рынок пока пуст'}
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {visibleMarketOffers.map((offer) => {
+              const rarity = getItemRarity(offer.item);
+              const style = getMarketRarityStyle(rarity);
+              return (
+                <article key={offer.offer_id} className={`min-w-0 overflow-hidden bg-[#12161b] border ${style.border} rounded-lg`}>
+                  <button onClick={() => { void openOfferById(offer.offer_id); }} className="w-full text-left">
+                    <div className={`relative aspect-[5/4] ${style.bg} border-b border-slate-800 flex items-center justify-center`}>
+                      <ItemArtwork item={offer.item} className="w-20 h-20 text-5xl" />
+                      <div className={`absolute left-2 top-2 px-1.5 py-0.5 rounded text-[8px] font-bold uppercase bg-black/45 ${style.text}`}>
+                        {rarity}
+                      </div>
+                      {offer.visibility === 'LINK_ONLY' && (
+                        <div className="absolute right-2 top-2 w-6 h-6 rounded-md bg-black/45 flex items-center justify-center" title="Только по ссылке">
+                          <EyeOff className="w-3.5 h-3.5 text-slate-300" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-2.5">
+                      <div className="text-xs font-bold text-white truncate">{getItemName(offer.item)}</div>
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1 text-amber-300 font-black text-sm min-w-0">
+                          <Star className="w-3.5 h-3.5 fill-amber-300 flex-shrink-0" />
+                          <span className="truncate">{formatMoney(offer.price)}</span>
+                        </div>
+                        <div className="flex items-center gap-1 text-[9px] text-slate-600 flex-shrink-0">
+                          <Clock3 className="w-3 h-3" />
+                          {formatMarketAge(offer.created_at)}
+                        </div>
+                      </div>
+                      <div className="mt-2 text-[9px] text-slate-500 truncate">{offer.seller_name}</div>
+                    </div>
+                  </button>
+                  {marketTabView === 'MY_OFFERS' && (
+                    <button
+                      onClick={() => { void handleCancelMarketOffer(offer); }}
+                      disabled={isCancellingOffer}
+                      className="w-full h-9 border-t border-slate-800 text-[10px] font-bold text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+                    >
+                      {isCancellingOffer ? 'Снимаем...' : 'Снять с продажи'}
+                    </button>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderMarketOfferV2 = () => {
+    if (!selectedMarketOffer) return null;
+    const offer = selectedMarketOffer;
+    const currentUserId = String(playerProfile?.id || '');
+    const isOwnOffer = Boolean(currentUserId) && offer.seller_telegram_id === currentUserId;
+    const isBoughtByCurrentUser = offer.status !== 'ACTIVE' && Boolean(currentUserId) && offer.buyer_telegram_id === currentUserId;
+    const canBuy = offer.status === 'ACTIVE' && !isOwnOffer && balance >= offer.price;
+    const offerLink = buildOfferLink(offer.offer_id);
+    const rarity = getItemRarity(offer.item);
+    const style = getMarketRarityStyle(rarity);
+
+    return (
+      <div className="flex flex-col h-full bg-[#0b0d10]">
+        <div className="h-14 px-3 flex items-center gap-2 bg-[#111419] sticky top-0 z-10 border-b border-slate-800">
+          <button onClick={() => setScreen(AppScreen.MARKET_MENU)} className="w-9 h-9 inline-flex items-center justify-center border border-slate-700 rounded-md hover:bg-slate-800" aria-label="Назад к рынку">
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+          <div className="min-w-0">
+            <div className="text-xs font-bold text-white truncate">Лот</div>
+            <div className="text-[9px] text-slate-600 font-mono truncate">{offer.offer_id.slice(-12)}</div>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => copyText(offerLink)} className="w-9 h-9 inline-flex items-center justify-center border border-slate-700 rounded-md hover:bg-slate-800 text-slate-300" title="Копировать ссылку" aria-label="Копировать ссылку">
+              <Link2 className="w-4 h-4" />
+            </button>
+            <BalanceBadge balance={balance} />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar pb-28">
+          <div className={`relative min-h-[240px] ${style.bg} border-b ${style.border} flex items-center justify-center`}>
+            <div className="absolute left-4 top-4 flex items-center gap-2">
+              <span className={`px-2 py-1 bg-black/45 rounded-md text-[9px] font-bold uppercase ${style.text}`}>{rarity}</span>
+              {offer.visibility === 'LINK_ONLY' && (
+                <span className="px-2 py-1 bg-black/45 rounded-md text-[9px] font-bold text-slate-300 flex items-center gap-1"><EyeOff className="w-3 h-3" /> По ссылке</span>
+              )}
+            </div>
+            <ItemArtwork item={offer.item} className="w-40 h-40 text-8xl" />
+          </div>
+
+          <div className="px-4 py-4 border-b border-slate-800">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="text-lg font-black text-white break-words">{getItemName(offer.item)}</h2>
+                <div className="mt-1 text-[10px] text-slate-600 font-mono break-all">{offer.item.uniqueId}</div>
+              </div>
+              <div className="flex items-center gap-1.5 text-amber-300 font-black text-xl flex-shrink-0">
+                <Star className="w-5 h-5 fill-amber-300" /> {formatMoney(offer.price)}
+              </div>
+            </div>
+          </div>
+
+          <div className="px-4 py-4 border-b border-slate-800">
+            <div className="flex items-center gap-2 text-[10px] text-slate-500 uppercase font-bold mb-2"><Tag className="w-3.5 h-3.5" /> Описание</div>
+            <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap break-words">{offer.description || 'Без описания'}</p>
+          </div>
+
+          <div className="px-4 py-4 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[9px] text-slate-600 uppercase font-bold">Продавец</div>
+              <div className="text-sm text-white font-bold truncate">{offer.seller_name}</div>
+            </div>
+            {offer.seller_show_profile_link && offer.seller_username && (
+              <a href={`https://t.me/${offer.seller_username}`} target="_blank" rel="noopener noreferrer" className="h-9 px-3 inline-flex items-center gap-1.5 border border-slate-700 rounded-md text-xs text-slate-300 hover:bg-slate-800">
+                @{offer.seller_username} <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </div>
+        </div>
+
+        <div className="fixed bottom-0 left-0 right-0 z-30 max-w-md mx-auto p-3 pb-[max(12px,env(safe-area-inset-bottom))] bg-[#111419]/95 backdrop-blur border-t border-slate-800">
+          {offer.status !== 'ACTIVE' ? (
+            <Button disabled variant="secondary" className="w-full h-12">{isBoughtByCurrentUser ? 'Куплено' : 'Лот недоступен'}</Button>
+          ) : isOwnOffer ? (
+            <Button onClick={() => { void handleCancelMarketOffer(offer); }} disabled={isCancellingOffer} variant="danger" className="w-full h-12">{isCancellingOffer ? 'Снимаем...' : 'Снять с продажи'}</Button>
+          ) : (
+            <Button onClick={handleBuySelectedOffer} disabled={!canBuy || isBuyingMarketOffer} className="w-full h-12 text-base">
+              {isBuyingMarketOffer ? 'Покупка...' : (canBuy ? `Купить за ${formatMoney(offer.price)}` : 'Недостаточно звезд')}
             </Button>
           )}
         </div>
@@ -3693,8 +3927,8 @@ export default function App() {
   }
 
   if (isTelegramRequiredForOffer) {
-    const deepLink = initialOfferId && resolvedBotUsername
-      ? `https://t.me/${resolvedBotUsername}/app?startapp=${encodeURIComponent(encodeOfferStartParam(initialOfferId))}`
+    const deepLink = initialOfferId
+      ? buildTelegramMiniAppUrl(encodeOfferStartParam(initialOfferId))
       : '';
     return (
       <div className="min-h-screen bg-slate-950 text-white max-w-md mx-auto p-6 flex flex-col items-center justify-center text-center">
@@ -3706,7 +3940,14 @@ export default function App() {
           Ссылки на товары работают только внутри Telegram WebApp.
         </p>
         {deepLink ? (
-          <Button onClick={() => window.location.assign(deepLink)} className="w-full max-w-xs">
+          <Button
+            onClick={() => {
+              const tg = window.Telegram?.WebApp;
+              if (tg?.openTelegramLink) tg.openTelegramLink(deepLink);
+              else window.location.assign(deepLink);
+            }}
+            className="w-full max-w-xs"
+          >
             Открыть в Telegram
           </Button>
         ) : (
@@ -3742,8 +3983,8 @@ export default function App() {
 
       {screen === AppScreen.GAMES_MENU && renderGamesMenu()}
       {screen === AppScreen.BUSINESS_MENU && renderBusinessMenu()}
-      {screen === AppScreen.MARKET_MENU && renderMarketMenu()}
-      {screen === AppScreen.MARKET_OFFER && renderMarketOffer()}
+      {screen === AppScreen.MARKET_MENU && renderMarketMenuV2()}
+      {screen === AppScreen.MARKET_OFFER && renderMarketOfferV2()}
       {screen === AppScreen.CASE_LIST && renderCaseList()}
       {screen === AppScreen.CASE_DETAIL && renderCaseDetail()}
       
@@ -3771,7 +4012,7 @@ export default function App() {
       {screen === AppScreen.SLOTS_GAME && renderSlotsGame()}
 
       {/* Bottom Nav */}
-      {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && screen !== AppScreen.CASE_DETAIL && screen !== AppScreen.ROCKET_GAME && screen !== AppScreen.UPGRADER_GAME && screen !== AppScreen.UPGRADER_SELECT_TARGET && screen !== AppScreen.SLOTS_GAME && (
+      {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && screen !== AppScreen.CASE_DETAIL && screen !== AppScreen.ROCKET_GAME && screen !== AppScreen.UPGRADER_GAME && screen !== AppScreen.UPGRADER_SELECT_TARGET && screen !== AppScreen.SLOTS_GAME && screen !== AppScreen.MARKET_OFFER && (
         <BottomNav activeTab={activeTab} onTabChange={handleTabChange} />
       )}
 

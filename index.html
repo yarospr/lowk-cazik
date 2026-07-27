@@ -25,6 +25,24 @@
         background-color: #0f172a; /* slate-950 */
         color: white;
       }
+      .roulette-viewport {
+        contain: layout paint style;
+        isolation: isolate;
+      }
+      .roulette-track {
+        will-change: transform;
+        backface-visibility: hidden;
+        transform-style: preserve-3d;
+      }
+      .roulette-card {
+        contain: layout paint style;
+        backface-visibility: hidden;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .roulette-track {
+          transition-duration: 700ms !important;
+        }
+      }
     </style>
   <script type="importmap">
 {

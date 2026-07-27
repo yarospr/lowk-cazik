@@ -1,82 +1,103 @@
-# lowk-cazik (GitHub Pages + Supabase)
+# lowk-cazik
 
-Current version includes:
-- case opening
-- rocket
-- upgrader
-- slots
-- leaderboard
-- Telegram-based account binding (same Telegram account -> same player profile)
+Telegram Mini App with case opening, market, leaderboard and games. The online
+mode uses a Supabase Edge Function as the only public API: the function validates
+Telegram `initData`, and privileged database keys never reach the browser.
 
-## Database modes
+## Storage modes
 
-The app no longer contains hardcoded Supabase credentials. It selects the storage mode at build time:
+- Online: set `VITE_SUPABASE_URL`. Telegram users share profiles, market and leaderboard.
+- Local development: without Telegram `initData`, the app uses IndexedDB in the current browser.
+- Forced local: set `VITE_FORCE_LOCAL_DB=1`.
 
-- With valid `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`, profiles, leaderboard and market use Supabase.
-- Without them, or if the configured service cannot be reached, the app falls back to a browser-local database. Profile and game progress persist on that device, while leaderboard and market are local to that browser.
+Local storage is a development/recovery mode. It is not a shared market.
 
-This fallback keeps the Mini App usable if the external database is missing or while a new Supabase project is being prepared.
+## 1. Create the Supabase schema
 
-## 1. Create Supabase table/migration
+Open Supabase `SQL Editor`, paste `supabase/schema.sql`, and run it. The script
+creates the player and market tables plus atomic market functions. Direct access
+from `anon` and `authenticated` clients is revoked.
 
-1. Open Supabase -> `SQL Editor`.
-2. Create `New query`.
-3. Paste `supabase/schema.sql` from this repo.
-4. Run.
+## 2. Deploy the API
 
-This script is idempotent and can be re-run safely.
+Install and authenticate the Supabase CLI, link the project, then deploy:
 
-## 2. Get Supabase keys
+```powershell
+supabase link --project-ref YOUR_PROJECT_REF
+supabase functions deploy game-api
+supabase secrets set TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN APP_ORIGIN=https://yarospr.github.io
+```
 
-Supabase -> `Project Settings` -> `API`:
-- `Project URL`
-- `Publishable key (anon)`
+Optional server settings:
 
-Do not use `secret`/`service_role` in frontend.
+```powershell
+supabase secrets set DEFAULT_BALANCE=0 TELEGRAM_AUTH_MAX_AGE=86400
+```
 
-## 3. Create local env file
+`TELEGRAM_BOT_TOKEN` and Supabase secret/service-role keys are server-only. Never
+put them in `.env.local`, Vite variables, source control, or a GitHub Pages build.
 
-In project root:
+## 3. Configure the frontend
 
 ```powershell
 copy .env.example .env.local
 ```
 
-Then fill `.env.local`:
-
 ```env
 VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_PUBLISHABLE_KEY
 VITE_DEFAULT_BALANCE=0
 VITE_TELEGRAM_BOT_USERNAME=YOUR_BOT_USERNAME_WITHOUT_AT
+VITE_TELEGRAM_APP_SHORT_NAME=
 VITE_FORCE_LOCAL_DB=0
 ```
 
-`VITE_TELEGRAM_BOT_USERNAME` is used to generate market links in format `https://t.me/<bot>/app?startapp=...` so they open directly in Telegram WebApp.
+For a Main Mini App, leave `VITE_TELEGRAM_APP_SHORT_NAME` empty. Shared offers
+then use `https://t.me/<bot>?startapp=o_<id>`. For a named Mini App, enter
+the exact short name from BotFather; links use
+`https://t.me/<bot>/<short-name>?startapp=o_<id>`.
 
-Use `VITE_FORCE_LOCAL_DB=1` only for a deliberately local-only build. Never commit a `service_role` or secret key; the publishable/anon key is the only Supabase key allowed in the frontend.
+The old hardcoded `/app` path is not universally valid and must not be used unless
+the Mini App short name is literally `app`.
 
-## 4. Run
+## 4. Run locally
 
 ```powershell
 npm install
 npm run dev
 ```
 
-## 5. GitHub Pages deploy
+## 5. GitHub Pages
 
-If you deploy via GitHub Actions, add repository secrets:
+Build the frontend with these repository secrets/variables:
+
 - `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
 - `VITE_DEFAULT_BALANCE` (optional)
+- `VITE_TELEGRAM_BOT_USERNAME`
+- `VITE_TELEGRAM_APP_SHORT_NAME` (only for a named Mini App)
 
-## 6. Telegram bot setup
+In BotFather, set the menu/Main Mini App URL to the GitHub Pages URL.
 
-In `@BotFather` set WebApp Menu URL to your GitHub Pages URL.
+## Security boundary
 
-## Verification checklist
+Anything shipped to a browser can be downloaded, including HTML, CSS, JavaScript
+and item images. Minification does not change that. Protection comes from keeping
+identity validation, RNG, balance changes, inventory changes, market transactions,
+rate limits and audit logs on a private backend. The current API already validates
+Telegram identity and makes market writes atomic; moving all game outcomes and
+economy synchronization server-side is the next hardening stage.
 
-1. Open app from Telegram bot menu button.
-2. Profile shows your player and data persists after reopen.
-3. `players` table has one stable row for your Telegram id.
-4. Balance/inventory change in-game and update in Supabase.
+The extraction boundary and staged hardening plan are documented in
+`docs/backend-separation.md`.
+
+For stronger source separation, keep the frontend source and backend in private
+repositories and publish only the compiled frontend assets. The compiled UI still
+remains observable, but a copied client cannot access protected data or perform
+valid economy operations without the server API.
+
+## Verification
+
+1. Open from the Telegram menu button, not a normal browser tab.
+2. Confirm one stable `players` row is created for the Telegram user.
+3. Open the same app from another device and confirm shared balance/inventory.
+4. Create and buy an offer with two Telegram accounts.
+5. Confirm invalid or stale `initData` receives `401` from `game-api`.

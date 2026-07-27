@@ -7,7 +7,6 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { gameDatabase } from './gameDatabase';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r25-scroll-safe-area';
 const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || 'lowkcazikbot').trim().replace(/^@/, '');
 const TELEGRAM_APP_SHORT_NAME = (((import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME as string) || '').trim().replace(/^\//, '');
 const OFFER_ID_PREFIX = 'offer_';
@@ -649,17 +648,16 @@ const CaseIcon = ({ emoji, className = "text-6xl" }: { emoji: string, className?
   </div>
 );
 
-const BalanceBadge = ({ balance, showMarker = false }: { balance: number; showMarker?: boolean }) => (
+const BalanceBadge = ({ balance }: { balance: number }) => (
   <div className="flex items-center gap-2 bg-slate-900 px-3 py-2 rounded-full border border-slate-800 shadow-inner">
     <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />
     <span className="font-mono font-bold text-yellow-100 text-base">{formatMoney(balance)}</span>
-    {showMarker && <span className="text-[10px] text-slate-500 ml-1">{BUILD_MARKER}</span>}
   </div>
 );
 
 const Header = ({ balance }: { balance: number }) => (
   <div className="sticky top-0 z-50 bg-slate-950/80 backdrop-blur-lg border-b border-slate-800 p-4 flex justify-between items-center">
-    <BalanceBadge balance={balance} showMarker />
+    <BalanceBadge balance={balance} />
   </div>
 );
 

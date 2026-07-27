@@ -96,6 +96,67 @@ export const gameDatabase = {
     return this.syncPlayer(telegramId, patch);
   },
 
+  async openCases(caseKey: string, quantity: number, idempotencyKey: string) {
+    return invoke<{ player: DatabaseRow; result: { drops: DatabaseRow[]; cost: number } }>('open_cases', {
+      case_key: caseKey,
+      quantity,
+      idempotency_key: idempotencyKey,
+    });
+  },
+
+  async sellItems(itemIds: string[], idempotencyKey: string) {
+    return invoke<{ player: DatabaseRow; result: { sold_item_ids: string[]; value: number } }>('sell_items', {
+      item_ids: itemIds,
+      idempotency_key: idempotencyKey,
+    });
+  },
+
+  async spinSlots(bet: number, idempotencyKey: string) {
+    return invoke<{ player: DatabaseRow; result: { variants: DatabaseRow[]; result_indices: number[]; winner_index: number; won_item: DatabaseRow | null } }>('slots_spin', {
+      bet,
+      idempotency_key: idempotencyKey,
+    });
+  },
+
+  async playUpgrader(inputItemId: string, targetItemId: number, idempotencyKey: string) {
+    return invoke<{ player: DatabaseRow; result: { won: boolean; chance: number; won_item: DatabaseRow | null } }>('upgrader_play', {
+      input_item_id: inputItemId,
+      target_item_id: targetItemId,
+      idempotency_key: idempotencyKey,
+    });
+  },
+
+  async startRocket(itemId: string, idempotencyKey: string) {
+    return invoke<{ player: DatabaseRow; result: { session_id: string; crash_multiplier: number; started_at: string } }>('rocket_start', {
+      item_id: itemId,
+      idempotency_key: idempotencyKey,
+    });
+  },
+
+  async cashoutRocket(sessionId: string, idempotencyKey: string) {
+    return invoke<{ player: DatabaseRow; result: { cashed_out: boolean; crashed: boolean; multiplier: number; won_item?: DatabaseRow } }>('rocket_cashout', {
+      session_id: sessionId,
+      idempotency_key: idempotencyKey,
+    });
+  },
+
+  async getBusinessState() {
+    return invoke<{ session: DatabaseRow | null }>('business_state');
+  },
+
+  async startBusiness(investment: number, idempotencyKey: string) {
+    return invoke<{ player: DatabaseRow; result: { session: DatabaseRow } }>('business_start', {
+      investment,
+      idempotency_key: idempotencyKey,
+    });
+  },
+
+  async claimBusinessReward(idempotencyKey: string) {
+    return invoke<{ player: DatabaseRow; result: { session: DatabaseRow } }>('business_claim', {
+      idempotency_key: idempotencyKey,
+    });
+  },
+
   async getLeaderboard() {
     if (shouldUseOnlineDatabase()) {
       const result = await invoke<{ players: DatabaseRow[] }>('leaderboard');
@@ -119,13 +180,17 @@ export const gameDatabase = {
     return getLocalPlayer(telegramId);
   },
 
-  async listMarketOffers(view: MarketView, currentPlayerId: string) {
+  async listMarketOffers(view: MarketView, currentPlayerId: string, searchQuery = '') {
+    const normalizedLotCode = String(searchQuery || '').trim().toUpperCase();
+    const exactLotCode = /^LOT-[A-Z0-9]{8}$/.test(normalizedLotCode) ? normalizedLotCode : '';
     if (shouldUseOnlineDatabase()) {
-      return invoke<{ offers: DatabaseRow[]; sellers: DatabaseRow[] }>('list_market', { view });
+      return invoke<{ offers: DatabaseRow[]; sellers: DatabaseRow[] }>('list_market', { view, query: exactLotCode });
     }
 
     let query = localDatabase.from('market_offers').select('*').eq('status', 'ACTIVE');
-    if (view === 'MY_OFFERS') {
+    if (exactLotCode) {
+      query = query.eq('lot_code', exactLotCode);
+    } else if (view === 'MY_OFFERS') {
       query = query.eq('seller_telegram_id', currentPlayerId);
     } else {
       query = query.eq('visibility', 'PUBLIC');

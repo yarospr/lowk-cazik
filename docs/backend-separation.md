@@ -20,9 +20,9 @@ The frontend repository should contain only the API client contract. Its only
 production configuration is `VITE_SUPABASE_URL`; no database key or bot token is
 needed in the browser.
 
-The existing `supabase/` directory is deliberately self-contained so it can be
-moved to a private repository without changing the `/functions/v1/game-api`
-endpoint used by `gameDatabase.ts`.
+The backend now lives in the separate local `lowk-cazik-backend` repository.
+The public frontend contains only the API client and keeps using the stable
+`/functions/v1/game-api` endpoint.
 
 ## Required server ownership
 
@@ -35,9 +35,9 @@ The backend must be authoritative for:
 5. Per-user rate limits, idempotency keys and replay protection.
 6. Item catalog versions and price/rule versions used for each outcome.
 
-The current backend already owns identity and atomic market transactions. The
-temporary `sync_player` action still accepts game state calculated by the client,
-so it is a compatibility path, not an anti-cheat boundary.
+The production backend owns identity, case, slots, rocket, upgrader, business,
+balance, inventory and market mutations. Client economy sync is disabled.
+State-changing commands use idempotency keys and transactional row locks.
 
 ## Migration stages
 
@@ -47,14 +47,14 @@ so it is a compatibility path, not an anti-cheat boundary.
 - Configure `TELEGRAM_BOT_TOKEN`, `APP_ORIGIN` and the frontend project URL.
 - Verify the shared market and leaderboard with two Telegram accounts.
 
-### Stage B: server-side case opening
+### Stage B: server-side case opening (complete)
 
 - Add `open_cases(case_id, quantity, idempotency_key)`.
 - Lock the player row, charge once, choose drops with `crypto.getRandomValues`,
   append canonical inventory items and return only animation results.
 - Remove balance/inventory fields from `sync_player` after the client switches.
 
-### Stage C: remaining games
+### Stage C: remaining games (complete)
 
 - Add one transactional command per game action.
 - Store pending rocket/upgrader/slots sessions server-side with expiry times.

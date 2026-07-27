@@ -1,16 +1,17 @@
 ﻿
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2 } from 'lucide-react';
+import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2, ChevronDown, Gem, Copy } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { gameDatabase } from './gameDatabase';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r23-market-polish';
+const BUILD_MARKER = 'v5069015-r24-market-backend';
 const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || 'lowkcazikbot').trim().replace(/^@/, '');
 const TELEGRAM_APP_SHORT_NAME = (((import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME as string) || '').trim().replace(/^\//, '');
 const OFFER_ID_PREFIX = 'offer_';
+const LOT_CODE_PATTERN = /^LOT-[A-Z0-9]{8}$/;
 const ALL_ITEMS = ITEMS_DATA["items_db"];
 const ITEM_BY_ID = new Map<number, BaseItem>(ALL_ITEMS.map(item => [item.id, item]));
 const IGNORED_NUMERIC_KEYS = new Set(['id', 'serial', 'obtainedAt', 'chance_percent', 'chance', 'payout']);
@@ -285,19 +286,42 @@ const simulateBusinessCatchup = (state: BusinessState, now: number): { nextState
   const reward = createBusinessReward(state.investment, state.nextDropAt);
   const rewardPrice = getItemPrice(reward.item);
   const earnedTotal = state.earnedTotal + rewardPrice;
-  const isCompleted = earnedTotal > state.targetTotal;
 
   return {
     nextState: {
       ...state,
       earnedTotal,
       rewardsCount: state.rewardsCount + 1,
-      active: !isCompleted,
-      pendingReward: isCompleted ? null : reward,
-      completedAt: isCompleted ? reward.createdAt : state.completedAt,
+      active: true,
+      pendingReward: reward,
+      completedAt: null,
       nextDropAt: null,
     },
-    rewards: [reward],
+    rewards: [],
+  };
+};
+
+const mapServerBusinessState = (raw: Record<string, unknown> | null): BusinessState => {
+  if (!raw) return EMPTY_BUSINESS_STATE;
+  const pendingItem = raw.pending_item && typeof raw.pending_item === 'object'
+    ? raw.pending_item as InventoryItem
+    : null;
+  const nextDropAt = raw.next_drop_at ? new Date(String(raw.next_drop_at)).getTime() : null;
+  const completedAt = raw.completed_at ? new Date(String(raw.completed_at)).getTime() : null;
+  return {
+    active: Boolean(raw.active),
+    investment: Math.max(0, Math.floor(toSafeNumber(raw.investment))),
+    targetTotal: Math.max(0, Math.floor(toSafeNumber(raw.target_total))),
+    earnedTotal: Math.max(0, Math.floor(toSafeNumber(raw.earned_total))),
+    nextDropAt: nextDropAt && Number.isFinite(nextDropAt) ? nextDropAt : null,
+    pendingReward: pendingItem ? {
+      item: pendingItem,
+      percent: 0,
+      targetPrice: Math.max(0, Math.floor(toSafeNumber(raw.pending_value))),
+      createdAt: Date.now(),
+    } : null,
+    completedAt: completedAt && Number.isFinite(completedAt) ? completedAt : null,
+    rewardsCount: Math.max(0, Math.floor(toSafeNumber(raw.rewards_count))),
   };
 };
 
@@ -384,7 +408,7 @@ type PlayerDbRow = {
 type OfferVisibility = 'PUBLIC' | 'LINK_ONLY';
 type OfferStatus = 'ACTIVE' | 'SOLD' | 'CANCELLED';
 type MarketViewTab = 'MARKET' | 'MY_OFFERS';
-type MarketSort = 'NEWEST' | 'PRICE_ASC' | 'PRICE_DESC';
+type MarketSort = 'NEWEST' | 'PRICE_ASC' | 'PRICE_DESC' | 'RARITY_DESC';
 type StatsDelta = {
   casesOpened?: number;
   spent?: number;
@@ -393,6 +417,7 @@ type StatsDelta = {
 
 type MarketOfferDbRow = {
   offer_id?: string;
+  lot_code?: string;
   seller_telegram_id?: string;
   buyer_telegram_id?: string | null;
   item_json?: InventoryItem | string | null;
@@ -406,6 +431,7 @@ type MarketOfferDbRow = {
 
 type MarketOffer = {
   offer_id: string;
+  lot_code: string;
   seller_telegram_id: string;
   buyer_telegram_id?: string;
   item: InventoryItem;
@@ -447,6 +473,34 @@ const parseOfferStartParam = (raw: unknown): string | null => {
   if (value.startsWith(OFFER_ID_PREFIX)) return value;
   if (value.startsWith('o_')) return `${OFFER_ID_PREFIX}${value.slice(2)}`;
   return null;
+};
+
+const normalizeLotCode = (raw: unknown): string | null => {
+  const value = String(raw || '').trim().toUpperCase();
+  return LOT_CODE_PATTERN.test(value) ? value : null;
+};
+
+const generateLotCode = (): string => {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return `LOT-${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+};
+
+const getPermanentItemId = (item: InventoryItem): string => `#${Math.max(1, item.serial).toString().padStart(4, '0')}`;
+
+const MARKET_SORT_OPTIONS: Array<{ value: MarketSort; label: string }> = [
+  { value: 'NEWEST', label: 'Новые' },
+  { value: 'PRICE_ASC', label: 'Дешевле' },
+  { value: 'PRICE_DESC', label: 'Дороже' },
+  { value: 'RARITY_DESC', label: 'Редкие' },
+];
+
+const RARITY_RANK: Record<string, number> = {
+  'обычный': 1,
+  'редкий': 2,
+  'эпический': 3,
+  'мифический': 4,
+  'легендарный': 5,
 };
 
 const buildTelegramMiniAppUrl = (startParam: string) => {
@@ -530,6 +584,7 @@ const mapOfferRow = (
 
   return {
     offer_id,
+    lot_code: normalizeLotCode(row.lot_code) || `LOT-${offer_id.replace(/[^a-z0-9]/gi, '').slice(-8).padStart(8, '0').toUpperCase()}`,
     seller_telegram_id,
     buyer_telegram_id: typeof row.buyer_telegram_id === 'string' ? row.buyer_telegram_id : undefined,
     item,
@@ -610,7 +665,7 @@ const Header = ({ balance }: { balance: number }) => (
 
 const BottomNav = ({ activeTab, onTabChange }: { activeTab: string, onTabChange: (tab: string) => void }) => {
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 pb-safe pt-2 px-4 flex justify-around items-center z-50 max-w-md mx-auto">
+    <div className="telegram-safe-bottom fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 pt-2 px-4 flex justify-around items-center z-50 max-w-md mx-auto">
       <button
         onClick={() => onTabChange('games')}
         aria-label="Игры"
@@ -762,7 +817,7 @@ const Roulette: React.FC<{
   const winnerRarity = getItemRarity(winner);
 
   return (
-    <div className={`relative min-w-0 ${compact ? 'h-[92px]' : 'h-40'}`}>
+    <div className={`relative min-w-0 flex-shrink-0 ${compact ? 'h-[92px]' : 'h-40'}`}>
       <div className="absolute left-2 top-1.5 z-20 flex items-center gap-1.5 text-[9px] font-bold text-slate-400">
         <span className="text-amber-300 font-mono">{String(index + 1).padStart(2, '0')}</span>
         <span className="uppercase">reel</span>
@@ -853,7 +908,7 @@ const RouletteScreen = ({
   }, [durationMs, finish, lowPower]);
 
   return (
-      <div className="flex flex-col h-screen bg-[#080a0d] overflow-hidden">
+      <div className="telegram-full-height flex flex-col h-full bg-[#080a0d] overflow-hidden">
         <div className="px-4 pt-4 pb-3 bg-[#101318] z-20 border-b border-slate-800">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0 flex items-center gap-3">
@@ -879,7 +934,7 @@ const RouletteScreen = ({
             <span>{lowPower ? 'экономичный режим' : 'плавная прокрутка'}</span>
           </div>
         </div>
-        <div className={`flex-1 p-3 pb-6 overflow-y-auto custom-scrollbar w-full ${compact ? 'grid grid-cols-2 content-start gap-2' : 'flex flex-col justify-center'}`}>
+        <div className={`flex-1 p-3 pb-6 overflow-y-auto custom-scrollbar w-full ${compact ? 'grid grid-cols-2 content-start gap-2' : `flex flex-col gap-2 ${droppedItems.length === 1 ? 'justify-center' : 'justify-start'}`}`}>
            {droppedItems.map((item, index) => (
              <Roulette
                 key={item.uniqueId}
@@ -985,6 +1040,7 @@ export default function App() {
   const [screen, setScreen] = useState<AppScreen>(AppScreen.GAMES_MENU);
   const [selectedCase, setSelectedCase] = useState<Case | null>(null);
   const [droppedItems, setDroppedItems] = useState<InventoryItem[]>([]);
+  const [isOpeningCase, setIsOpeningCase] = useState(false);
   
   const [activeTab, setActiveTab] = useState('games');
   const [openAmount, setOpenAmount] = useState(1);
@@ -1002,6 +1058,7 @@ export default function App() {
   const [marketTabView, setMarketTabView] = useState<MarketViewTab>('MARKET');
   const [marketSearch, setMarketSearch] = useState('');
   const [marketSort, setMarketSort] = useState<MarketSort>('NEWEST');
+  const [isMarketSortOpen, setIsMarketSortOpen] = useState(false);
   const [isLoadingMarket, setIsLoadingMarket] = useState(false);
   const [selectedMarketOffer, setSelectedMarketOffer] = useState<MarketOffer | null>(null);
   const [isBuyingMarketOffer, setIsBuyingMarketOffer] = useState(false);
@@ -1011,9 +1068,13 @@ export default function App() {
   const [createOfferDescription, setCreateOfferDescription] = useState('');
   const [createOfferVisibility, setCreateOfferVisibility] = useState<OfferVisibility>('PUBLIC');
   const [createdOfferLink, setCreatedOfferLink] = useState<string | null>(null);
+  const [createdOfferLotCode, setCreatedOfferLotCode] = useState<string | null>(null);
   const [isPublishingOffer, setIsPublishingOffer] = useState(false);
   const [isCancellingOffer, setIsCancellingOffer] = useState(false);
   const [isTelegramRequiredForOffer, setIsTelegramRequiredForOffer] = useState(false);
+  const [uiToast, setUiToast] = useState<string | null>(null);
+  const [copyFallbackText, setCopyFallbackText] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const pendingOfferIdRef = useRef<string | null>(null);
   const didHandleInitialOfferRef = useRef(false);
   const marketReturnTimerRef = useRef<number | null>(null);
@@ -1048,12 +1109,15 @@ export default function App() {
   const [rocketWinnings, setRocketWinnings] = useState<BaseItem | null>(null);
   const rocketRequestRef = useRef<number | null>(null);
   const rocketStartTimeRef = useRef<number>(0);
+  const rocketSessionIdRef = useRef<string | null>(null);
+  const rocketCrashPointRef = useRef(0);
 
   // Upgrader Game State
   const [upgraderBetItem, setUpgraderBetItem] = useState<InventoryItem | null>(null);
   const [upgraderTargetItem, setUpgraderTargetItem] = useState<BaseItem | null>(null);
   const [upgraderSpinState, setUpgraderSpinState] = useState<'IDLE' | 'SPINNING' | 'WIN' | 'LOSE'>('IDLE');
   const [upgraderRotation, setUpgraderRotation] = useState(0);
+  const upgraderServerResultRef = useRef<{ won: boolean } | null>(null);
 
   // Slots Game State
   const [slotsBet, setSlotsBet] = useState<number>(1000);
@@ -1101,11 +1165,15 @@ export default function App() {
   const visibleMarketOffers = useMemo(() => {
     const query = marketSearch.trim().toLocaleLowerCase('ru-RU');
     const filtered = query
-      ? marketOffers.filter(offer => [getItemName(offer.item), offer.description, offer.seller_name]
+      ? marketOffers.filter(offer => [getItemName(offer.item), offer.description, offer.seller_name, offer.lot_code, offer.offer_id, getPermanentItemId(offer.item)]
           .some(value => value.toLocaleLowerCase('ru-RU').includes(query)))
       : [...marketOffers];
     if (marketSort === 'PRICE_ASC') filtered.sort((left, right) => left.price - right.price);
     if (marketSort === 'PRICE_DESC') filtered.sort((left, right) => right.price - left.price);
+    if (marketSort === 'RARITY_DESC') filtered.sort((left, right) => {
+      const rarityDifference = (RARITY_RANK[getItemRarity(right.item)] || 0) - (RARITY_RANK[getItemRarity(left.item)] || 0);
+      return rarityDifference || getItemPrice(right.item) - getItemPrice(left.item);
+    });
     return filtered;
   }, [marketOffers, marketSearch, marketSort]);
 
@@ -1262,49 +1330,70 @@ export default function App() {
   }, [initialOfferId]);
 
   const grantBusinessReward = useCallback((dropAt = Date.now()) => {
-    let reward: BusinessRewardNotice | null = null;
-
     setBusinessState(prev => {
       if (!prev.active || prev.pendingReward || prev.nextDropAt === null) return prev;
 
-      reward = createBusinessReward(prev.investment, dropAt);
+      const reward = createBusinessReward(prev.investment, dropAt);
       const rewardPrice = getItemPrice(reward.item);
       const earnedTotal = prev.earnedTotal + rewardPrice;
-      const isCompleted = earnedTotal > prev.targetTotal;
 
       return {
         ...prev,
         earnedTotal,
         rewardsCount: prev.rewardsCount + 1,
-        active: !isCompleted,
-        pendingReward: !isCompleted ? reward : null,
-        completedAt: isCompleted ? dropAt : prev.completedAt,
+        active: true,
+        pendingReward: reward,
+        completedAt: null,
         nextDropAt: null,
       };
     });
+  }, []);
 
-    if (reward) {
-      // Reward item is committed to inventory immediately at drop time.
-      applyStatsDelta({ won: getItemPrice(reward.item) });
-      setInventory(prev => [reward.item, ...prev]);
-    }
-  }, [applyStatsDelta]);
+  const applyAuthoritativePlayer = useCallback((row: PlayerDbRow) => {
+    const profile = mapDbRowToProfile(row);
+    setBalance(profile.balance);
+    setInventory(profile.inventory);
+    setPlayerProfile(previous => previous ? {
+      ...previous,
+      balance: profile.balance,
+      inventory: profile.inventory,
+      stats_cases_opened: profile.stats_cases_opened,
+      stats_total_spent: profile.stats_total_spent,
+      stats_total_won: profile.stats_total_won,
+    } : previous);
+  }, []);
 
   const runBusinessCatchup = useCallback(() => {
     const now = Date.now();
     const snapshot = businessStateRef.current;
-    const { nextState, rewards } = simulateBusinessCatchup(snapshot, now);
-    if (rewards.length === 0) return;
+    const { nextState } = simulateBusinessCatchup(snapshot, now);
+    if (nextState === snapshot) return;
 
     setBusinessState(nextState);
-    const generatedItems = rewards.map(entry => entry.item).reverse();
-    applyStatsDelta({ won: sumItemPrices(generatedItems) });
-    setInventory(prev => [...generatedItems, ...prev]);
-  }, [applyStatsDelta]);
+  }, []);
 
   useEffect(() => {
     if (!playerProfile?.id) return;
     setIsBusinessHydrated(false);
+
+    if (gameDatabase.isOnline()) {
+      let cancelled = false;
+      gameDatabase.getBusinessState()
+        .then(({ session }) => {
+          if (cancelled) return;
+          const nextState = mapServerBusinessState(session);
+          setBusinessState(nextState);
+          businessStateRef.current = nextState;
+          if (nextState.investment > 0) setBusinessInvestmentInput(String(nextState.investment));
+          setBusinessClockMs(Date.now());
+          setIsBusinessHydrated(true);
+        })
+        .catch(error => {
+          console.error('Failed to load business state', error);
+          if (!cancelled) setIsBusinessHydrated(true);
+        });
+      return () => { cancelled = true; };
+    }
 
     const storageKey = getBusinessStorageKey(playerProfile.id);
     let parsed = EMPTY_BUSINESS_STATE;
@@ -1318,7 +1407,7 @@ export default function App() {
     }
 
     const now = Date.now();
-    const { nextState, rewards } = simulateBusinessCatchup(parsed, now);
+    const { nextState } = simulateBusinessCatchup(parsed, now);
     setBusinessState(nextState);
     businessStateRef.current = nextState;
     setBusinessClockMs(now);
@@ -1326,32 +1415,17 @@ export default function App() {
       setBusinessInvestmentInput(String(parsed.investment));
     }
 
-    if (rewards.length > 0) {
-      const generatedItems = rewards.map(entry => entry.item).reverse();
-      applyStatsDelta({ won: sumItemPrices(generatedItems) });
-      setInventory(prev => [...generatedItems, ...prev]);
-    }
     setIsBusinessHydrated(true);
-  }, [playerProfile?.id, applyStatsDelta]);
+  }, [playerProfile?.id]);
 
   useEffect(() => {
-    if (!playerProfile?.id || !isBusinessHydrated) return;
+    if (!playerProfile?.id || !isBusinessHydrated || gameDatabase.isOnline()) return;
     const storageKey = getBusinessStorageKey(playerProfile.id);
     localStorage.setItem(storageKey, JSON.stringify(businessState));
   }, [businessState, playerProfile?.id, isBusinessHydrated]);
 
   useEffect(() => {
-    const pending = businessState.pendingReward;
-    if (!pending) return;
-
-    setInventory(prev => {
-      const exists = prev.some(item => item.uniqueId === pending.item.uniqueId);
-      if (exists) return prev;
-      return [pending.item, ...prev];
-    });
-  }, [businessState.pendingReward]);
-
-  useEffect(() => {
+    if (gameDatabase.isOnline()) return;
     const timer = window.setInterval(() => {
       const now = Date.now();
       setBusinessClockMs(now);
@@ -1367,10 +1441,29 @@ export default function App() {
   }, [grantBusinessReward]);
 
   useEffect(() => {
+    if (!gameDatabase.isOnline() || !playerProfile?.id || !isBusinessHydrated) return;
+    let cancelled = false;
+    const refresh = () => gameDatabase.getBusinessState()
+      .then(({ session }) => {
+        if (cancelled) return;
+        const nextState = mapServerBusinessState(session);
+        setBusinessState(nextState);
+        businessStateRef.current = nextState;
+        setBusinessClockMs(Date.now());
+      })
+      .catch(error => console.error('Failed to refresh business state', error));
+    const timer = window.setInterval(refresh, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [playerProfile?.id, isBusinessHydrated]);
+
+  useEffect(() => {
     const onResume = () => {
       if (document.visibilityState === 'hidden') return;
       setBusinessClockMs(Date.now());
-      runBusinessCatchup();
+      if (!gameDatabase.isOnline()) runBusinessCatchup();
     };
 
     document.addEventListener('visibilitychange', onResume);
@@ -1384,7 +1477,7 @@ export default function App() {
 
   // --- SYNC TO DB ---
   useEffect(() => {
-    if (!isLoaded || !playerProfile) return;
+    if (!isLoaded || !playerProfile || gameDatabase.isOnline()) return;
 
     const timer = setTimeout(async () => {
       try {
@@ -1529,16 +1622,34 @@ export default function App() {
     return url.toString();
   }, []);
 
+  const showToast = useCallback((message: string) => {
+    setUiToast(message);
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => {
+      setUiToast(null);
+      toastTimerRef.current = null;
+    }, 2400);
+  }, []);
+
   const copyText = useCallback(async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      alert('Ссылка скопирована');
+      showToast('Ссылка скопирована');
     } catch {
-      window.prompt('Скопируйте ссылку', text);
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand('copy');
+      textarea.remove();
+      if (copied) showToast('Ссылка скопирована');
+      else setCopyFallbackText(text);
     }
-  }, []);
+  }, [showToast]);
 
-  const fetchMarketOffers = useCallback(async (view: MarketViewTab = marketTabView) => {
+  const fetchMarketOffers = useCallback(async (view: MarketViewTab = marketTabView, searchQuery = '') => {
     setIsLoadingMarket(true);
     const currentPlayerId = String(playerProfile?.id || '').trim();
     if (view === 'MY_OFFERS') {
@@ -1551,7 +1662,7 @@ export default function App() {
 
     let result: { offers: Record<string, unknown>[]; sellers: Record<string, unknown>[] };
     try {
-      result = await gameDatabase.listMarketOffers(view, currentPlayerId);
+      result = await gameDatabase.listMarketOffers(view, currentPlayerId, searchQuery);
     } catch (error) {
       console.error('Failed to fetch market offers', error);
       setIsLoadingMarket(false);
@@ -1596,14 +1707,14 @@ export default function App() {
   const openOfferById = useCallback(async (offerId: string) => {
     const offer = await fetchSingleOffer(offerId);
     if (!offer) {
-      alert('Товар не найден');
+      showToast('Лот не найден или уже недоступен');
       return false;
     }
     setSelectedMarketOffer(offer);
     setScreen(AppScreen.MARKET_OFFER);
     setActiveTab('market');
     return true;
-  }, [fetchSingleOffer]);
+  }, [fetchSingleOffer, showToast]);
 
   const openCreateOfferModal = useCallback(() => {
     if (selectedInventoryIds.size !== 1) return;
@@ -1616,6 +1727,7 @@ export default function App() {
     setCreateOfferDescription('');
     setCreateOfferVisibility('PUBLIC');
     setCreatedOfferLink(null);
+    setCreatedOfferLotCode(null);
     setShowCreateOfferModal(true);
   }, [inventory, selectedInventoryIds]);
 
@@ -1627,6 +1739,7 @@ export default function App() {
     setCreateOfferDescription('');
     setCreateOfferVisibility('PUBLIC');
     setCreatedOfferLink(null);
+    setCreatedOfferLotCode(null);
   }, [isPublishingOffer]);
 
   const handlePublishOffer = useCallback(async () => {
@@ -1636,15 +1749,17 @@ export default function App() {
 
     const exists = inventory.some(item => item.uniqueId === createOfferItem.uniqueId);
     if (!exists) {
-      alert('Предмет уже отсутствует в инвентаре');
+      showToast('Предмет уже отсутствует в инвентаре');
       return;
     }
 
     const offerId = `offer_${generateUUID()}`;
+    const lotCode = generateLotCode();
     setIsPublishingOffer(true);
 
     const payload = {
       offer_id: offerId,
+      lot_code: lotCode,
       seller_telegram_id: playerProfile.id,
       item_json: createOfferItem,
       price,
@@ -1654,9 +1769,10 @@ export default function App() {
     };
 
     try {
-      await gameDatabase.createMarketOffer(payload);
+      const createdOffer = await gameDatabase.createMarketOffer(payload);
+      setCreatedOfferLotCode(normalizeLotCode(createdOffer.lot_code) || lotCode);
     } catch (error) {
-      alert(`Ошибка публикации: ${error instanceof Error ? error.message : 'неизвестная ошибка'}`);
+      showToast(`Ошибка публикации: ${error instanceof Error ? error.message : 'неизвестная ошибка'}`);
       setIsPublishingOffer(false);
       return;
     }
@@ -1676,6 +1792,7 @@ export default function App() {
     buildOfferLink,
     fetchMarketOffers,
     marketTabView,
+    showToast,
   ]);
 
   const handleCancelMarketOffer = useCallback(async (offer: MarketOffer) => {
@@ -1688,7 +1805,7 @@ export default function App() {
       await gameDatabase.cancelMarketOffer(offer.offer_id, playerProfile.id);
     } catch (error) {
       console.error('Failed to cancel market offer', error);
-      alert('Не удалось снять товар с продажи');
+      showToast('Не удалось снять товар с продажи');
       setIsCancellingOffer(false);
       await fetchMarketOffers(marketTabView);
       return;
@@ -1710,25 +1827,25 @@ export default function App() {
 
     await fetchMarketOffers(marketTabView);
     setIsCancellingOffer(false);
-  }, [fetchMarketOffers, marketTabView, playerProfile, selectedMarketOffer]);
+  }, [fetchMarketOffers, marketTabView, playerProfile, selectedMarketOffer, showToast]);
 
   const handleBuySelectedOffer = useCallback(async () => {
     if (!selectedMarketOffer || !playerProfile) return;
     const buyerId = String(playerProfile.telegram_id || playerProfile.id || '');
     if (!buyerId) {
-      alert('Не удалось определить аккаунт покупателя');
+      showToast('Не удалось определить аккаунт покупателя');
       return;
     }
     if (selectedMarketOffer.status !== 'ACTIVE') {
-      alert('Товар уже недоступен');
+      showToast('Лот уже недоступен');
       return;
     }
     if (selectedMarketOffer.seller_telegram_id === buyerId) {
-      alert('Нельзя купить собственный товар');
+      showToast('Нельзя купить собственный лот');
       return;
     }
     if (balance < selectedMarketOffer.price) {
-      alert('Недостаточно звезд');
+      showToast('Недостаточно звезд');
       return;
     }
 
@@ -1737,7 +1854,7 @@ export default function App() {
     try {
       purchase = await gameDatabase.buyMarketOffer(selectedMarketOffer.offer_id, buyerId);
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Товар уже куплен другим игроком');
+      showToast(error instanceof Error ? error.message : 'Лот уже куплен другим игроком');
       setIsBuyingMarketOffer(false);
       await fetchMarketOffers(marketTabView);
       return;
@@ -1775,16 +1892,24 @@ export default function App() {
       setActiveTab('market');
       marketReturnTimerRef.current = null;
     }, 1000);
-  }, [selectedMarketOffer, playerProfile, balance, fetchMarketOffers, marketTabView]);
+  }, [selectedMarketOffer, playerProfile, balance, fetchMarketOffers, marketTabView, showToast]);
 
   useEffect(() => {
     if (screen !== AppScreen.MARKET_MENU) return;
-    fetchMarketOffers(marketTabView);
+    const exactLotCode = normalizeLotCode(marketSearch) || '';
+    const initialTimer = window.setTimeout(() => fetchMarketOffers(marketTabView, exactLotCode), exactLotCode ? 120 : 0);
     const timer = window.setInterval(() => {
-      fetchMarketOffers(marketTabView);
+      fetchMarketOffers(marketTabView, exactLotCode);
     }, 10000);
-    return () => window.clearInterval(timer);
-  }, [screen, fetchMarketOffers, marketTabView]);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
+  }, [screen, fetchMarketOffers, marketTabView, marketSearch]);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!isLoaded || !playerProfile || didHandleInitialOfferRef.current) return;
@@ -1816,72 +1941,65 @@ export default function App() {
   };
 
   // --- SLOTS LOGIC ---
-  const handleSlotsStart = () => {
+  const handleSlotsStart = async () => {
     if (balance < slotsBet) {
-      alert("Недостаточно звезд!");
+      showToast('Недостаточно звезд');
       return;
     }
 
-    setBalance(prev => prev - slotsBet);
-    applyStatsDelta({ spent: slotsBet });
-    
-    // 1. Select 4 random variants based on bet multipliers for THIS spin
-    const multipliers = [0.5, 1.5, 5.0, 20.0];
-    const variants = multipliers.map(m => getRandomItemNearPrice(slotsBet * m));
-    const variantData = variants.map(v => ({ item: v, payout: getItemPrice(v) }));
-
-    // 2. Logic for 97% RTP with Equal Chance per Item
-    const sumPrices = variantData.reduce((acc, v) => acc + v.payout, 0);
-    const p = (0.97 * slotsBet) / sumPrices;
-    const totalWinProb = 4 * p;
-    
-    const r = Math.random();
+    let variantData: { item: BaseItem; payout: number }[];
+    let resultIndices: number[];
     let winnerIndex = -1;
+    let authoritativeWinItem: InventoryItem | null = null;
 
-    // Determine Result
-    if (r < totalWinProb) {
-        const normalizedR = r / totalWinProb; // 0 to 1
-        winnerIndex = Math.floor(normalizedR * 4); 
-        if (winnerIndex > 3) winnerIndex = 3;
-    }
-
-    let resultIndices = [0, 0, 0];
-    let isWin = false;
-
-    if (winnerIndex !== -1) {
-        // WIN
-        resultIndices = [winnerIndex, winnerIndex, winnerIndex];
-        isWin = true;
+    if (gameDatabase.isOnline()) {
+      try {
+        const response = await gameDatabase.spinSlots(slotsBet, `slots_${generateUUID()}`);
+        const variants = response.result.variants.map(item => item as unknown as BaseItem);
+        variantData = variants.map(item => ({ item, payout: getItemPrice(item) }));
+        resultIndices = response.result.result_indices;
+        winnerIndex = response.result.winner_index;
+        authoritativeWinItem = response.result.won_item as unknown as InventoryItem | null;
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Не удалось запустить слот');
+        return;
+      }
     } else {
-        // LOSE
-        const r1 = Math.floor(Math.random() * 4);
-        let r2 = Math.floor(Math.random() * 4);
-        while(r2 === r1) r2 = Math.floor(Math.random() * 4); 
-        const r3 = Math.floor(Math.random() * 4);
-        resultIndices = [r1, r2, r3];
+      setBalance(prev => prev - slotsBet);
+      applyStatsDelta({ spent: slotsBet });
+      const multipliers = [0.5, 1.5, 5.0, 20.0];
+      const variants = multipliers.map(multiplier => getRandomItemNearPrice(slotsBet * multiplier));
+      variantData = variants.map(item => ({ item, payout: getItemPrice(item) }));
+      const sumPrices = variantData.reduce((acc, variant) => acc + variant.payout, 0);
+      const totalWinProb = 4 * ((0.97 * slotsBet) / sumPrices);
+      const roll = Math.random();
+      if (roll < totalWinProb) winnerIndex = Math.min(3, Math.floor((roll / totalWinProb) * 4));
+      if (winnerIndex !== -1) {
+        resultIndices = [winnerIndex, winnerIndex, winnerIndex];
+      } else {
+        const first = Math.floor(Math.random() * 4);
+        let second = Math.floor(Math.random() * 4);
+        while (second === first) second = Math.floor(Math.random() * 4);
+        resultIndices = [first, second, Math.floor(Math.random() * 4)];
+      }
     }
 
-    // 3. Generate Strips for Animation
     const STRIP_LENGTH = 25;
     const TARGET_INDEX = 20;
-
     const newStrips = [[], [], []] as {item: BaseItem, payout: number}[][];
-
-    for(let reel = 0; reel < 3; reel++) {
-        const strip = [];
-        for(let i = 0; i < STRIP_LENGTH; i++) {
-            if (i === TARGET_INDEX) {
-                strip.push(variantData[resultIndices[reel]]);
-            } else {
-                const randVar = variantData[Math.floor(Math.random() * 4)];
-                strip.push(randVar);
-            }
-        }
-        newStrips[reel] = strip;
+    for (let reel = 0; reel < 3; reel++) {
+      const strip = [];
+      for (let index = 0; index < STRIP_LENGTH; index++) {
+        strip.push(index === TARGET_INDEX
+          ? variantData[resultIndices[reel]]
+          : variantData[Math.floor(Math.random() * 4)]);
+      }
+      newStrips[reel] = strip;
     }
 
     setSlotsReelStrips(newStrips);
-    setSlotsWinItem(isWin ? variantData[winnerIndex].item : null);
+    setSlotsWinItem(winnerIndex >= 0 ? variantData[winnerIndex].item : null);
 
     setScreen(AppScreen.SLOTS_GAME);
     setSlotsSpinState('PRE_SPIN'); 
@@ -1892,8 +2010,8 @@ export default function App() {
 
     setTimeout(() => {
         setSlotsSpinState('FINISHED');
-        if (isWin) {
-             const newItem: InventoryItem = {
+        if (winnerIndex >= 0 && !authoritativeWinItem) {
+            const newItem: InventoryItem = {
               ...variantData[winnerIndex].item,
               uniqueId: generateUUID(),
               serial: generateSerial(),
@@ -1906,16 +2024,31 @@ export default function App() {
   };
 
   // --- UPGRADER LOGIC ---
-  const startUpgrader = () => {
+  const startUpgrader = async () => {
     if (!upgraderBetItem || !upgraderTargetItem) return;
-    
     setUpgraderSpinState('SPINNING');
 
-    const chance = getItemPrice(upgraderBetItem) / getItemPrice(upgraderTargetItem);
+    let chance = getItemPrice(upgraderBetItem) / getItemPrice(upgraderTargetItem);
+    let isWin: boolean;
+    if (gameDatabase.isOnline()) {
+      try {
+        const response = await gameDatabase.playUpgrader(upgraderBetItem.uniqueId, upgraderTargetItem.id, `upgrader_${generateUUID()}`);
+        chance = response.result.chance;
+        isWin = response.result.won;
+        upgraderServerResultRef.current = { won: isWin };
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+      } catch (error) {
+        upgraderServerResultRef.current = null;
+        setUpgraderSpinState('IDLE');
+        showToast(error instanceof Error ? error.message : 'Не удалось запустить улучшение');
+        return;
+      }
+    } else {
+      isWin = Math.random() < chance;
+      upgraderServerResultRef.current = null;
+    }
+
     const winSectorDegrees = 360 * chance;
-    
-    const isWin = Math.random() < chance;
-    
     let targetAngle = 0;
     
     if (isWin) {
@@ -1937,11 +2070,16 @@ export default function App() {
 
   const handleUpgraderComplete = () => {
     if (!upgraderBetItem || !upgraderTargetItem) return;
-    
+
     const chance = getItemPrice(upgraderBetItem) / getItemPrice(upgraderTargetItem);
     const winSectorDegrees = 360 * chance;
     const normalizedAngle = upgraderRotation % 360;
-    const isWin = normalizedAngle <= winSectorDegrees;
+    const isWin = upgraderServerResultRef.current?.won ?? normalizedAngle <= winSectorDegrees;
+    if (gameDatabase.isOnline()) {
+      setUpgraderSpinState(isWin ? 'WIN' : 'LOSE');
+      upgraderServerResultRef.current = null;
+      return;
+    }
     applyStatsDelta({
       spent: getItemPrice(upgraderBetItem),
       won: isWin ? getItemPrice(upgraderTargetItem) : 0,
@@ -1966,19 +2104,34 @@ export default function App() {
   };
 
   // --- ROCKET LOGIC ---
-  const startRocketGame = () => {
+  const startRocketGame = async () => {
     if (!rocketBetItem) return;
-    
+
+    if (gameDatabase.isOnline()) {
+      try {
+        const response = await gameDatabase.startRocket(rocketBetItem.uniqueId, `rocket_start_${generateUUID()}`);
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+        rocketSessionIdRef.current = response.result.session_id;
+        rocketCrashPointRef.current = response.result.crash_multiplier;
+        setRocketCrashPoint(response.result.crash_multiplier);
+        const serverStartedAt = new Date(response.result.started_at).getTime();
+        rocketStartTimeRef.current = Number.isFinite(serverStartedAt) ? serverStartedAt : Date.now();
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Не удалось запустить ракетку');
+        return;
+      }
+    } else {
+      applyStatsDelta({ spent: getItemPrice(rocketBetItem) });
+      const r = Math.random();
+      const crash = 1.00 / (1 - r);
+      rocketCrashPointRef.current = Math.max(1.00, crash);
+      setRocketCrashPoint(rocketCrashPointRef.current);
+      rocketStartTimeRef.current = Date.now();
+    }
+
     setRocketState('FLYING');
     setRocketMultiplier(1.00);
     setRocketWinnings(null);
-    applyStatsDelta({ spent: getItemPrice(rocketBetItem) });
-    
-    const r = Math.random();
-    const crash = 1.00 / (1 - r);
-    setRocketCrashPoint(Math.max(1.00, crash));
-    
-    rocketStartTimeRef.current = Date.now();
     rocketRequestRef.current = requestAnimationFrame(rocketTick);
   };
 
@@ -1988,18 +2141,44 @@ export default function App() {
     const currentMult = Math.pow(Math.E, 0.06 * elapsed);
     setRocketMultiplier(currentMult);
 
-    if (currentMult >= rocketCrashPoint) {
+    if (currentMult >= rocketCrashPointRef.current) {
        setRocketState('CRASHED');
-       setInventory(prev => prev.filter(i => i.uniqueId !== rocketBetItem?.uniqueId));
+       if (!gameDatabase.isOnline()) setInventory(prev => prev.filter(i => i.uniqueId !== rocketBetItem?.uniqueId));
        setRocketBetItem(null);
     } else {
        rocketRequestRef.current = requestAnimationFrame(rocketTick);
     }
   };
 
-  const stopRocketGame = () => {
+  const stopRocketGame = async () => {
     if (rocketState !== 'FLYING' || !rocketBetItem) return;
     cancelAnimationFrame(rocketRequestRef.current!);
+
+    if (gameDatabase.isOnline()) {
+      const sessionId = rocketSessionIdRef.current;
+      if (!sessionId) return;
+      try {
+        const response = await gameDatabase.cashoutRocket(sessionId, `rocket_cashout_${generateUUID()}`);
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+        setRocketMultiplier(response.result.multiplier);
+        if (response.result.crashed || !response.result.cashed_out) {
+          setRocketState('CRASHED');
+          setRocketWinnings(null);
+        } else {
+          const wonItem = response.result.won_item as unknown as InventoryItem;
+          setRocketState('CASHED_OUT');
+          setRocketWinnings(wonItem);
+        }
+        setRocketBetItem(null);
+        rocketSessionIdRef.current = null;
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Не удалось забрать выигрыш');
+        setRocketState('CRASHED');
+        setRocketBetItem(null);
+      }
+      return;
+    }
+
     setRocketState('CASHED_OUT');
     
     const winValue = getItemPrice(rocketBetItem) * rocketMultiplier;
@@ -2029,12 +2208,28 @@ export default function App() {
   }, []);
 
   // --- CASE LOGIC ---
-  const handleOpenCase = () => {
-    if (!selectedCase) return;
+  const handleOpenCase = async () => {
+    if (!selectedCase || isOpeningCase) return;
     const totalCost = selectedCase.price * openAmount;
     
     if (balance < totalCost) {
-      alert("Недостаточно звезд!");
+      showToast('Недостаточно звезд');
+      return;
+    }
+
+    if (gameDatabase.isOnline()) {
+      setIsOpeningCase(true);
+      try {
+        const response = await gameDatabase.openCases(selectedCase.key, openAmount, `cases_${generateUUID()}`);
+        const drops = response.result.drops.map(item => item as unknown as InventoryItem);
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+        setDroppedItems(drops);
+        setScreen(AppScreen.ROULETTE);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Не удалось открыть кейс');
+      } finally {
+        setIsOpeningCase(false);
+      }
       return;
     }
 
@@ -2065,21 +2260,32 @@ export default function App() {
   };
 
   const handleRouletteSequenceComplete = () => {
-     setInventory(prev => [...droppedItems, ...prev]);
+     if (!gameDatabase.isOnline()) setInventory(prev => [...droppedItems, ...prev]);
      setScreen(AppScreen.DROP_SUMMARY);
   };
 
-  const sellSelected = () => {
+  const sellSelected = async () => {
     if (selectedInventoryIds.size === 0) return;
     const idsToSell = new Set(selectedInventoryIds);
     const totalValue = selectedSellValue;
+
+    if (gameDatabase.isOnline()) {
+      try {
+        const response = await gameDatabase.sellItems(Array.from(idsToSell), `sell_${generateUUID()}`);
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+        setSelectedInventoryIds(new Set());
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Не удалось продать предметы');
+      }
+      return;
+    }
 
     setInventory(prev => prev.filter(i => !idsToSell.has(i.uniqueId)));
     setBalance(prev => prev + totalValue);
     setSelectedInventoryIds(new Set());
   };
 
-  const handleSellAll = () => {
+  const handleSellAll = async () => {
     if (sellAllInFlightRef.current) return;
     if (inventory.length === 0) {
       setShowSellAllConfirm(false);
@@ -2092,6 +2298,19 @@ export default function App() {
     setShowSellAllConfirm(false);
     setSelectedInventoryIds(new Set());
 
+    if (gameDatabase.isOnline()) {
+      try {
+        const response = await gameDatabase.sellItems(inventory.map(item => item.uniqueId), `sell_all_${generateUUID()}`);
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Не удалось продать инвентарь');
+      } finally {
+        setIsSellAllPending(false);
+        sellAllInFlightRef.current = false;
+      }
+      return;
+    }
+
     window.setTimeout(() => {
       setInventory([]);
       setBalance(prev => prev + totalValue);
@@ -2100,7 +2319,7 @@ export default function App() {
     }, 0);
   };
 
-  const handleStartBusiness = () => {
+  const handleStartBusiness = async () => {
     if (businessState.active) return;
     const parsed = Math.floor(toSafeNumber(businessInvestmentInput));
     const investment = Number.isFinite(parsed) ? parsed : 0;
@@ -2109,6 +2328,21 @@ export default function App() {
       return;
     }
     if (balance < investment) {
+      return;
+    }
+
+    if (gameDatabase.isOnline()) {
+      try {
+        const response = await gameDatabase.startBusiness(investment, `business_start_${generateUUID()}`);
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+        const nextState = mapServerBusinessState(response.result.session);
+        setBusinessState(nextState);
+        businessStateRef.current = nextState;
+        setBusinessClockMs(Date.now());
+        setBusinessInvestmentInput(String(investment));
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Не удалось запустить бизнес');
+      }
       return;
     }
 
@@ -2132,13 +2366,35 @@ export default function App() {
     setBusinessInvestmentInput(String(investment));
   };
 
-  const handleClaimBusinessReward = () => {
+  const handleClaimBusinessReward = async () => {
+    if (gameDatabase.isOnline()) {
+      try {
+        const response = await gameDatabase.claimBusinessReward(`business_claim_${generateUUID()}`);
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+        const nextState = mapServerBusinessState(response.result.session);
+        setBusinessState(nextState);
+        businessStateRef.current = nextState;
+        setBusinessClockMs(Date.now());
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Не удалось забрать предмет');
+      }
+      return;
+    }
+
+    const pending = businessStateRef.current.pendingReward;
+    if (!pending) return;
+
+    setInventory(prev => prev.some(item => item.uniqueId === pending.item.uniqueId) ? prev : [pending.item, ...prev]);
+    applyStatsDelta({ won: getItemPrice(pending.item) });
     setBusinessState(prev => {
       if (!prev.active || !prev.pendingReward) return prev;
+      const completed = prev.earnedTotal > prev.targetTotal;
       return {
         ...prev,
+        active: !completed,
         pendingReward: null,
-        nextDropAt: Date.now() + BUSINESS_TICK_MS,
+        completedAt: completed ? Date.now() : null,
+        nextDropAt: completed ? null : Date.now() + BUSINESS_TICK_MS,
       };
     });
   };
@@ -2464,6 +2720,7 @@ export default function App() {
                   <Check className="w-6 h-6 text-emerald-300" />
                 </div>
                 <div className="font-bold text-white">Предмет появился на рынке</div>
+                {createdOfferLotCode && <div className="mt-2 text-sm text-emerald-300 font-black font-mono">{createdOfferLotCode}</div>}
               </div>
               <div className="bg-[#090b0e] border border-slate-800 rounded-md px-3 py-2.5 text-[10px] text-slate-400 font-mono break-all">{createdOfferLink}</div>
               <div className="grid grid-cols-2 gap-2">
@@ -2479,7 +2736,7 @@ export default function App() {
                   <div className="min-w-0 flex-1">
                     <span className={`inline-block mb-1 text-[9px] font-bold uppercase ${rarityStyle.text}`}>{rarity}</span>
                     <div className="font-bold text-white truncate">{getItemName(createOfferItem)}</div>
-                    <div className="text-[9px] text-slate-500 font-mono truncate">{createOfferItem.uniqueId}</div>
+                    <div className="text-xs text-amber-200 font-black font-mono">{getPermanentItemId(createOfferItem)}</div>
                   </div>
                 </div>
               )}
@@ -2757,27 +3014,48 @@ export default function App() {
           </button>
         </div>
 
-        <div className="mt-2 grid grid-cols-[1fr_112px] gap-2">
+        <div className="mt-2 grid grid-cols-[minmax(0,1fr)_112px] gap-2">
           <label className="h-10 flex items-center gap-2 px-3 bg-[#090b0e] border border-slate-800 rounded-md focus-within:border-emerald-500/60">
             <Search className="w-4 h-4 text-slate-500 flex-shrink-0" />
             <input
               type="search"
+              name="market-search"
+              autoComplete="off"
               value={marketSearch}
               onChange={(event) => setMarketSearch(event.target.value)}
-              placeholder="Поиск"
+              placeholder="Название, #ID или LOT-..."
               className="min-w-0 w-full bg-transparent outline-none text-xs text-white placeholder:text-slate-600"
             />
           </label>
-          <select
-            value={marketSort}
-            onChange={(event) => setMarketSort(event.target.value as MarketSort)}
-            className="h-10 px-2 bg-[#090b0e] border border-slate-800 rounded-md text-[11px] font-bold text-slate-300 outline-none focus:border-emerald-500/60"
-            aria-label="Сортировка рынка"
-          >
-            <option value="NEWEST">Новые</option>
-            <option value="PRICE_ASC">Дешевле</option>
-            <option value="PRICE_DESC">Дороже</option>
-          </select>
+          <div className="relative z-30">
+            <button
+              type="button"
+              onClick={() => setIsMarketSortOpen(value => !value)}
+              className="w-full h-10 px-2.5 flex items-center justify-between gap-1 bg-[#090b0e] border border-slate-800 rounded-md text-[11px] font-bold text-slate-300 focus:border-emerald-500/60"
+              aria-haspopup="listbox"
+              aria-expanded={isMarketSortOpen}
+            >
+              <span>{MARKET_SORT_OPTIONS.find(option => option.value === marketSort)?.label}</span>
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isMarketSortOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {isMarketSortOpen && (
+              <div className="absolute right-0 top-11 w-36 overflow-hidden bg-[#15191f] border border-slate-700 rounded-md shadow-2xl" role="listbox">
+                {MARKET_SORT_OPTIONS.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => { setMarketSort(option.value); setIsMarketSortOpen(false); }}
+                    className={`w-full h-10 px-3 flex items-center gap-2 text-left text-xs font-bold hover:bg-slate-800 ${marketSort === option.value ? 'text-emerald-300 bg-emerald-400/5' : 'text-slate-300'}`}
+                    role="option"
+                    aria-selected={marketSort === option.value}
+                  >
+                    {option.value === 'RARITY_DESC' && <Gem className="w-3.5 h-3.5" />}
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -2812,6 +3090,10 @@ export default function App() {
                     </div>
                     <div className="p-2.5">
                       <div className="text-xs font-bold text-white truncate">{getItemName(offer.item)}</div>
+                      <div className="mt-1 flex items-center justify-between gap-1 font-mono text-[9px]">
+                        <span className="text-amber-200 font-bold">{getPermanentItemId(offer.item)}</span>
+                        <span className="text-slate-500 truncate">{offer.lot_code}</span>
+                      </div>
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1 text-amber-300 font-black text-sm min-w-0">
                           <Star className="w-3.5 h-3.5 fill-amber-300 flex-shrink-0" />
@@ -2855,14 +3137,14 @@ export default function App() {
     const style = getMarketRarityStyle(rarity);
 
     return (
-      <div className="flex flex-col h-full bg-[#0b0d10]">
+      <div className="flex flex-col h-full min-h-0 bg-[#0b0d10]">
         <div className="h-14 px-3 flex items-center gap-2 bg-[#111419] sticky top-0 z-10 border-b border-slate-800">
           <button onClick={() => setScreen(AppScreen.MARKET_MENU)} className="w-9 h-9 inline-flex items-center justify-center border border-slate-700 rounded-md hover:bg-slate-800" aria-label="Назад к рынку">
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="min-w-0">
             <div className="text-xs font-bold text-white truncate">Лот</div>
-            <div className="text-[9px] text-slate-600 font-mono truncate">{offer.offer_id.slice(-12)}</div>
+            <div className="text-[9px] text-emerald-300/80 font-mono truncate">{offer.lot_code}</div>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button onClick={() => copyText(offerLink)} className="w-9 h-9 inline-flex items-center justify-center border border-slate-700 rounded-md hover:bg-slate-800 text-slate-300" title="Копировать ссылку" aria-label="Копировать ссылку">
@@ -2873,7 +3155,7 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar pb-28">
-          <div className={`relative min-h-[240px] ${style.bg} border-b ${style.border} flex items-center justify-center`}>
+          <div className={`relative min-h-[clamp(210px,36vh,300px)] ${style.bg} border-b ${style.border} flex items-center justify-center`}>
             <div className="absolute left-4 top-4 flex items-center gap-2">
               <span className={`px-2 py-1 bg-black/45 rounded-md text-[9px] font-bold uppercase ${style.text}`}>{rarity}</span>
               {offer.visibility === 'LINK_ONLY' && (
@@ -2887,7 +3169,10 @@ export default function App() {
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <h2 className="text-lg font-black text-white break-words">{getItemName(offer.item)}</h2>
-                <div className="mt-1 text-[10px] text-slate-600 font-mono break-all">{offer.item.uniqueId}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="px-2 py-1 rounded bg-amber-300/10 border border-amber-300/25 text-xs text-amber-200 font-black font-mono">{getPermanentItemId(offer.item)}</span>
+                  <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-[10px] text-slate-400 font-mono">{offer.lot_code}</span>
+                </div>
               </div>
               <div className="flex items-center gap-1.5 text-amber-300 font-black text-xl flex-shrink-0">
                 <Star className="w-5 h-5 fill-amber-300" /> {formatMoney(offer.price)}
@@ -2913,7 +3198,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="fixed bottom-0 left-0 right-0 z-30 max-w-md mx-auto p-3 pb-[max(12px,env(safe-area-inset-bottom))] bg-[#111419]/95 backdrop-blur border-t border-slate-800">
+        <div className="telegram-safe-bottom fixed bottom-0 left-0 right-0 z-30 max-w-md mx-auto p-3 bg-[#111419]/95 backdrop-blur border-t border-slate-800">
           {offer.status !== 'ACTIVE' ? (
             <Button disabled variant="secondary" className="w-full h-12">{isBoughtByCurrentUser ? 'Куплено' : 'Лот недоступен'}</Button>
           ) : isOwnOffer ? (
@@ -3787,8 +4072,8 @@ export default function App() {
 
         <div className="fixed bottom-0 left-0 w-full bg-slate-900/95 backdrop-blur-md p-4 border-t border-slate-800 shadow-[0_-10px_40px_rgba(0,0,0,0.5)] z-40 max-w-md mx-auto right-0">
           <QuantitySelector value={openAmount} onChange={setOpenAmount} />
-          <Button onClick={handleOpenCase} className="w-full py-4 text-lg" disabled={balance < selectedCase.price * openAmount}>
-            {balance < selectedCase.price * openAmount ? "Недостаточно звезд" : (
+          <Button onClick={handleOpenCase} className="w-full py-4 text-lg" disabled={isOpeningCase || balance < selectedCase.price * openAmount}>
+            {isOpeningCase ? <Loader2 className="w-5 h-5 animate-spin" /> : balance < selectedCase.price * openAmount ? "Недостаточно звезд" : (
                <span className="flex items-center gap-2">
                  Открыть {openAmount} за <Star className="w-5 h-5 fill-black" /> {formatMoney(selectedCase.price * openAmount)}
                </span>
@@ -3801,24 +4086,24 @@ export default function App() {
 
   const renderDropSummary = () => {
     return (
-      <div className="min-h-screen bg-slate-950 p-4 flex flex-col items-center justify-center overflow-y-auto custom-scrollbar">
-        <h1 className="text-3xl font-black text-white mb-8 uppercase tracking-widest text-center drop-shadow-[0_0_15px_rgba(255,255,255,0.5)] mt-8">
+      <div className="telegram-full-height min-h-0 bg-slate-950 p-3 flex flex-col items-center overflow-y-auto custom-scrollbar">
+        <h1 className="text-2xl font-black text-white mb-5 uppercase tracking-widest text-center drop-shadow-[0_0_15px_rgba(255,255,255,0.5)] mt-6">
            Полученные предметы
         </h1>
 
-        <div className={`grid gap-4 w-full ${droppedItems.length === 1 ? 'grid-cols-1' : 'grid-cols-2'} mb-8`}>
+        <div className="grid grid-cols-3 gap-2 w-full mb-6">
            {droppedItems.map((item, idx) => {
               const rarityCol = getRarityColor(getItemRarity(item));
               const glow = getRarityGlow(getItemRarity(item));
               
               return (
-                <div key={idx} className={`relative group bg-slate-900 border-2 rounded-xl p-4 flex flex-col items-center overflow-hidden animate-in zoom-in duration-500 fill-mode-backwards ${rarityCol} ${glow}`} style={{animationDelay: `${idx * 100}ms`}}>
+                <div key={item.uniqueId || idx} className={`relative group min-w-0 bg-slate-900 border rounded-lg p-2 flex flex-col items-center overflow-hidden animate-in zoom-in duration-500 fill-mode-backwards ${rarityCol} ${glow}`} style={{animationDelay: `${idx * 70}ms`}}>
                    <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
-                   <div className="text-6xl mb-4 drop-shadow-2xl z-10">{item.emg}</div>
-                   <div className="font-bold text-white z-10 text-center leading-tight text-sm">{getItemName(item)}</div>
-                   <div className="text-xs text-slate-400 mt-1 font-mono z-10">#{item.serial.toString().padStart(4, '0')}</div>
-                   <div className="mt-3 px-3 py-1 bg-black/40 rounded-full text-yellow-400 text-sm font-bold flex items-center gap-1 z-10 border border-yellow-500/20">
-                      <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(getItemPrice(item))}
+                   <ItemArtwork item={item} className="w-14 h-14 text-4xl mb-2 z-10" />
+                   <div className="w-full min-h-8 font-bold text-white z-10 text-center leading-tight text-[10px] line-clamp-2">{getItemName(item)}</div>
+                   <div className="text-[9px] text-slate-400 mt-1 font-mono z-10">{getPermanentItemId(item)}</div>
+                   <div className="mt-2 max-w-full px-2 py-1 bg-black/40 rounded text-yellow-400 text-[10px] font-bold flex items-center gap-1 z-10 border border-yellow-500/20">
+                      <Star className="w-2.5 h-2.5 fill-yellow-400 flex-shrink-0" /> <span className="truncate">{formatMoney(getItemPrice(item))}</span>
                    </div>
                 </div>
               )
@@ -4007,7 +4292,26 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-hidden">
+    <div className="telegram-app-frame bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-hidden">
+      {uiToast && createPortal(
+        <div className="telegram-toast fixed left-1/2 z-[220] -translate-x-1/2 px-4 py-3 bg-[#171c22] border border-emerald-400/35 rounded-md shadow-2xl text-xs font-bold text-white flex items-center gap-2" role="status">
+          <Check className="w-4 h-4 text-emerald-300" /> {uiToast}
+        </div>,
+        document.body,
+      )}
+      {copyFallbackText && createPortal(
+        <div className="fixed inset-0 z-[210] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="copy-link-title">
+          <div className="w-full max-w-sm bg-[#111419] border border-slate-700 rounded-lg p-4 shadow-2xl">
+            <div className="flex items-center justify-between gap-3">
+              <h3 id="copy-link-title" className="font-bold text-white">Скопировать ссылку</h3>
+              <button type="button" onClick={() => setCopyFallbackText(null)} className="w-8 h-8 flex items-center justify-center border border-slate-700 rounded-md" aria-label="Закрыть"><X className="w-4 h-4" /></button>
+            </div>
+            <textarea readOnly value={copyFallbackText} onFocus={event => event.currentTarget.select()} rows={4} className="mt-4 w-full bg-[#090b0e] border border-slate-700 rounded-md p-3 text-xs text-slate-300 outline-none focus:border-emerald-400 resize-none" />
+            <button type="button" onClick={() => { void copyText(copyFallbackText); }} className="mt-3 w-full h-11 rounded-md bg-emerald-400 text-[#07130e] text-xs font-black uppercase flex items-center justify-center gap-2"><Copy className="w-4 h-4" /> Копировать</button>
+          </div>
+        </div>,
+        document.body,
+      )}
       
       {showWelcomeModal && renderWelcomeModal()}
       {showSettingsModal && renderSettingsModal()}

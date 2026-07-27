@@ -18,6 +18,8 @@ const ITEM_NAME_KEY = '\u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435';
 const ITEM_PRICE_KEY = '\u0446\u0435\u043d\u0430';
 const ITEM_RARITY_KEY = '\u0440\u0435\u0434\u043a\u043e\u0441\u0442\u044c';
 const BUSINESS_TICK_MS = 60_000;
+const MAX_INVENTORY_ITEMS = 5000;
+const INVENTORY_LIMIT_MESSAGE = '\u041d\u0435\u043b\u044c\u0437\u044f \u0438\u043c\u0435\u0442\u044c \u0431\u043e\u043b\u0435\u0435 5 000 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u043e\u0432';
 
 type BusinessRewardNotice = {
   item: InventoryItem;
@@ -810,10 +812,9 @@ const Roulette: React.FC<{
 
   return (
     <div className={`relative min-w-0 flex-shrink-0 ${compact ? 'h-[92px]' : 'h-40'}`}>
-      <div className="absolute left-2 top-1.5 z-20 flex items-center gap-1.5 text-[9px] font-bold text-slate-400">
-        <span className="text-amber-300 font-mono">{String(index + 1).padStart(2, '0')}</span>
-        <span className="uppercase">reel</span>
-      </div>
+      <span className="absolute left-2 top-1.5 z-20 text-[9px] font-bold font-mono text-amber-300">
+        {String(index + 1).padStart(2, '0')}
+      </span>
       <div
         ref={containerRef}
         className={`roulette-viewport relative w-full h-full overflow-hidden bg-[#0b0d10] border transition-colors duration-300 ${settled ? getRarityColor(winnerRarity).split(' ').find(value => value.startsWith('border-')) : 'border-slate-800'} rounded-lg`}
@@ -1956,6 +1957,10 @@ export default function App() {
 
   // --- SLOTS LOGIC ---
   const handleSlotsStart = async () => {
+    if (inventory.length >= MAX_INVENTORY_ITEMS) {
+      showToast(INVENTORY_LIMIT_MESSAGE);
+      return;
+    }
     if (balance < slotsBet) {
       showToast('Недостаточно звезд');
       return;
@@ -2225,6 +2230,11 @@ export default function App() {
   const handleOpenCase = async () => {
     if (!selectedCase || isOpeningCase) return;
     const totalCost = selectedCase.price * openAmount;
+
+    if (inventory.length + openAmount > MAX_INVENTORY_ITEMS) {
+      showToast(INVENTORY_LIMIT_MESSAGE);
+      return;
+    }
     
     if (balance < totalCost) {
       showToast('Недостаточно звезд');
@@ -2335,6 +2345,10 @@ export default function App() {
 
   const handleStartBusiness = async () => {
     if (businessState.active) return;
+    if (inventory.length >= MAX_INVENTORY_ITEMS) {
+      showToast(INVENTORY_LIMIT_MESSAGE);
+      return;
+    }
     const parsed = Math.floor(toSafeNumber(businessInvestmentInput));
     const investment = Number.isFinite(parsed) ? parsed : 0;
     if (investment < 1) {
@@ -2381,6 +2395,10 @@ export default function App() {
   };
 
   const handleClaimBusinessReward = async () => {
+    if (inventory.length >= MAX_INVENTORY_ITEMS) {
+      showToast(INVENTORY_LIMIT_MESSAGE);
+      return;
+    }
     if (gameDatabase.isOnline()) {
       try {
         const response = await gameDatabase.claimBusinessReward(`business_claim_${generateUUID()}`);

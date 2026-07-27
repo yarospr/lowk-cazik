@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Case Clicker Casino</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /* Custom Scrollbar for WebKit */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #1e293b;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #475569;
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #64748b;
+      }
+      body {
+        background-color: #0f172a; /* slate-950 */
+        color: white;
+        margin: 0;
+        min-height: 100%;
+        overscroll-behavior: none;
+      }
+      html,
+      #root {
+        min-height: 100%;
+      }
+      .telegram-app-frame {
+        height: var(--tg-viewport-stable-height, 100dvh);
+        min-height: var(--tg-viewport-stable-height, 100dvh);
+        padding-top: var(--tg-content-safe-area-inset-top, 0px);
+        box-sizing: border-box;
+      }
+      .telegram-full-height {
+        height: calc(var(--tg-viewport-stable-height, 100dvh) - var(--tg-content-safe-area-inset-top, 0px));
+      }
+      .telegram-safe-bottom {
+        padding-bottom: max(12px, var(--tg-content-safe-area-inset-bottom, 0px), env(safe-area-inset-bottom, 0px));
+      }
+      .telegram-toast {
+        bottom: max(88px, calc(var(--tg-content-safe-area-inset-bottom, 0px) + 76px));
+        width: max-content;
+        max-width: calc(100vw - 32px);
+      }
+      .roulette-viewport {
+        contain: layout paint style;
+        isolation: isolate;
+      }
+      .roulette-track {
+        will-change: transform;
+        backface-visibility: hidden;
+        transform-style: preserve-3d;
+      }
+      .roulette-card {
+        contain: layout paint style;
+        backface-visibility: hidden;
+      }
+      .roulette-card.rarity-card::before,
+      .roulette-card.rarity-card::after {
+        position: absolute;
+        color: var(--rarity-particle, rgba(255, 255, 255, 0.12));
+        pointer-events: none;
+        z-index: 0;
+      }
+      .roulette-card.rarity-card::before {
+        content: "✦ · ✧";
+        top: 9%;
+        left: 8%;
+        font-size: 10px;
+        transform: rotate(-8deg);
+      }
+      .roulette-card.rarity-card::after {
+        content: "✧ · ✦";
+        right: 7%;
+        bottom: 19%;
+        font-size: 8px;
+        transform: rotate(11deg);
+      }
+      .roulette-card.rarity-card > * {
+        position: relative;
+        z-index: 1;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .roulette-track {
+          transition-duration: 700ms !important;
+        }
+      }
+    </style>
+
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.84.0"
+  }
+}
+</script>
+  <script type="module" crossorigin src="./assets/index-yHowKlsf.js"></script>
+</head>
+  <body>
+    <div id="root"></div>
+</body>
+</html>

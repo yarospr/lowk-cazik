@@ -7,7 +7,7 @@ import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { gameDatabase } from './gameDatabase';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r24-market-backend';
+const BUILD_MARKER = 'v5069015-r25-scroll-safe-area';
 const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || 'lowkcazikbot').trim().replace(/^@/, '');
 const TELEGRAM_APP_SHORT_NAME = (((import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME as string) || '').trim().replace(/^\//, '');
 const OFFER_ID_PREFIX = 'offer_';
@@ -1078,6 +1078,7 @@ export default function App() {
   const pendingOfferIdRef = useRef<string | null>(null);
   const didHandleInitialOfferRef = useRef(false);
   const marketReturnTimerRef = useRef<number | null>(null);
+  const marketRequestIdRef = useRef(0);
   const initialOfferId = useMemo(() => {
     try {
       const url = new URL(window.location.href);
@@ -1650,12 +1651,15 @@ export default function App() {
   }, [showToast]);
 
   const fetchMarketOffers = useCallback(async (view: MarketViewTab = marketTabView, searchQuery = '') => {
+    const requestId = ++marketRequestIdRef.current;
     setIsLoadingMarket(true);
     const currentPlayerId = String(playerProfile?.id || '').trim();
     if (view === 'MY_OFFERS') {
       if (!currentPlayerId) {
-        setMarketOffers([]);
-        setIsLoadingMarket(false);
+        if (requestId === marketRequestIdRef.current) {
+          setMarketOffers([]);
+          setIsLoadingMarket(false);
+        }
         return;
       }
     }
@@ -1665,9 +1669,11 @@ export default function App() {
       result = await gameDatabase.listMarketOffers(view, currentPlayerId, searchQuery);
     } catch (error) {
       console.error('Failed to fetch market offers', error);
-      setIsLoadingMarket(false);
+      if (requestId === marketRequestIdRef.current) setIsLoadingMarket(false);
       return;
     }
+
+    if (requestId !== marketRequestIdRef.current) return;
 
     const rows = result.offers as MarketOfferDbRow[];
     const sellersById = new Map<string, PlayerDbRow>();
@@ -1683,6 +1689,15 @@ export default function App() {
     setMarketOffers(mapped);
     setIsLoadingMarket(false);
   }, [marketTabView, playerProfile?.id]);
+
+  const handleMarketTabChange = useCallback((view: MarketViewTab) => {
+    if (view === marketTabView) return;
+    marketRequestIdRef.current += 1;
+    setMarketTabView(view);
+    setMarketOffers([]);
+    setIsLoadingMarket(true);
+    setIsMarketSortOpen(false);
+  }, [marketTabView]);
 
   const fetchSingleOffer = useCallback(async (offerId: string) => {
     let result: { offer: Record<string, unknown> | null; seller: Record<string, unknown> | null };
@@ -2669,7 +2684,7 @@ export default function App() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="font-bold text-sm text-white truncate">{getItemName(item)}</div>
-                      <div className="text-[11px] text-slate-500">{`ID: ${item.uniqueId}`}</div>
+                      <div className="text-[11px] text-slate-500 font-mono">{`ID: ${getPermanentItemId(item)}`}</div>
                     </div>
                     <div className="text-yellow-400 font-bold text-xs flex items-center gap-1">
                       <Star className="w-3 h-3 fill-yellow-400" />
@@ -2976,7 +2991,7 @@ export default function App() {
   };
 
   const renderMarketMenuV2 = () => (
-    <div className="flex flex-col h-full bg-[#0b0d10]">
+    <div className="flex flex-col h-full min-h-0 bg-[#0b0d10]">
       <div className="px-4 pt-4 pb-3 bg-[#111419] border-b border-slate-800 sticky top-0 z-10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
@@ -3001,13 +3016,13 @@ export default function App() {
 
         <div className="mt-3 grid grid-cols-2 gap-1 bg-[#090b0e] border border-slate-800 p-1 rounded-lg">
           <button
-            onClick={() => setMarketTabView('MARKET')}
+            onClick={() => handleMarketTabChange('MARKET')}
             className={`h-9 text-xs font-bold rounded-md transition-colors ${marketTabView === 'MARKET' ? 'bg-emerald-400 text-[#07100c]' : 'text-slate-400 hover:text-white'}`}
           >
             Все лоты
           </button>
           <button
-            onClick={() => setMarketTabView('MY_OFFERS')}
+            onClick={() => handleMarketTabChange('MY_OFFERS')}
             className={`h-9 text-xs font-bold rounded-md transition-colors ${marketTabView === 'MY_OFFERS' ? 'bg-emerald-400 text-[#07100c]' : 'text-slate-400 hover:text-white'}`}
           >
             Мои лоты
@@ -3059,7 +3074,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="p-3 pb-24 overflow-y-auto custom-scrollbar">
+      <div className="flex-1 min-h-0 p-3 pb-24 overflow-y-auto custom-scrollbar">
         {isLoadingMarket && marketOffers.length === 0 ? (
           <div className="py-20 flex justify-center text-emerald-300"><Loader2 className="w-7 h-7 animate-spin" /></div>
         ) : visibleMarketOffers.length === 0 ? (
@@ -3214,7 +3229,7 @@ export default function App() {
   };
 
   const renderGamesMenu = () => (
-    <div className="p-4 flex flex-col gap-4 pb-24">
+    <div className="h-full min-h-0 p-4 flex flex-col gap-4 pb-24 overflow-y-auto custom-scrollbar">
       <h2 className="text-2xl font-bold text-white mb-4 px-2">Игры</h2>
       
       <button 
@@ -4292,7 +4307,7 @@ export default function App() {
   }
 
   return (
-    <div className="telegram-app-frame bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-hidden">
+    <div className={`telegram-app-frame ${initialOfferId ? 'telegram-offer-entry' : ''} bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-x-hidden overflow-y-auto`}>
       {uiToast && createPortal(
         <div className="telegram-toast fixed left-1/2 z-[220] -translate-x-1/2 px-4 py-3 bg-[#171c22] border border-emerald-400/35 rounded-md shadow-2xl text-xs font-bold text-white flex items-center gap-2" role="status">
           <Check className="w-4 h-4 text-emerald-300" /> {uiToast}

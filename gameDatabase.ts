@@ -111,6 +111,12 @@ export const gameDatabase = {
     });
   },
 
+  async sellAllItems(idempotencyKey: string) {
+    return invoke<{ player: DatabaseRow; result: { sold_count: number; value: number } }>('sell_all_items', {
+      idempotency_key: idempotencyKey,
+    });
+  },
+
   async spinSlots(bet: number, idempotencyKey: string) {
     return invoke<{ player: DatabaseRow; result: { variants: DatabaseRow[]; result_indices: number[]; winner_index: number; won_item: DatabaseRow | null } }>('slots_spin', {
       bet,

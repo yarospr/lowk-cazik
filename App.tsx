@@ -2314,7 +2314,7 @@ export default function App() {
 
     if (gameDatabase.isOnline()) {
       try {
-        const response = await gameDatabase.sellItems(inventory.map(item => item.uniqueId), `sell_all_${generateUUID()}`);
+        const response = await gameDatabase.sellAllItems(`sell_all_${generateUUID()}`);
         applyAuthoritativePlayer(response.player as PlayerDbRow);
       } catch (error) {
         showToast(error instanceof Error ? error.message : 'Не удалось продать инвентарь');

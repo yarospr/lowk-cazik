@@ -53,7 +53,6 @@ const validateInitData = async (initData: string): Promise<TelegramUser> => {
   const receivedHash = params.get('hash') || '';
   if (!receivedHash) throw new Error('Telegram hash is missing');
   params.delete('hash');
-  params.delete('signature');
 
   const dataCheckString = Array.from(params.entries())
     .sort(([left], [right]) => left.localeCompare(right))

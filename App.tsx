@@ -1,7 +1,7 @@
 ﻿
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2, ChevronDown, Gem, Copy } from 'lucide-react';
+import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2, ChevronDown, Gem, Copy, Ban } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { gameDatabase } from './gameDatabase';
@@ -1018,6 +1018,7 @@ export default function App() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [isTelegramUser, setIsTelegramUser] = useState(false);
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
+  const [accessBlocked, setAccessBlocked] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   
   // Registration / Settings form state
@@ -1277,6 +1278,12 @@ export default function App() {
       try {
         row = await gameDatabase.getOrCreatePlayer(userId, insertPayload) as PlayerDbRow;
       } catch (error) {
+          const message = error instanceof Error ? error.message : '';
+          if (/заблокирован/i.test(message)) {
+            setAccessBlocked(true);
+            setIsLoaded(true);
+            return;
+          }
           console.error('Failed to initialize player profile', error);
           setPlayerProfile({
             id: userId,
@@ -4267,6 +4274,18 @@ export default function App() {
   const ArrowRightIcon = () => (
       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
   );
+
+  if (accessBlocked) {
+    return (
+      <div className="telegram-app-frame min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center px-8 text-center">
+        <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mb-5">
+          <Ban className="w-8 h-8 text-red-400" />
+        </div>
+        <h1 className="text-2xl font-black">Доступ заблокирован</h1>
+        <p className="mt-3 text-sm text-slate-400">Вы были заблокированы администратором.</p>
+      </div>
+    );
+  }
 
   if (!isLoaded && !showWelcomeModal) {
     return (

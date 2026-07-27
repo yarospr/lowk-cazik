@@ -655,12 +655,6 @@ const BalanceBadge = ({ balance }: { balance: number }) => (
   </div>
 );
 
-const Header = ({ balance }: { balance: number }) => (
-  <div className="sticky top-0 z-50 bg-slate-950/80 backdrop-blur-lg border-b border-slate-800 p-4 flex justify-between items-center">
-    <BalanceBadge balance={balance} />
-  </div>
-);
-
 const BottomNav = ({ activeTab, onTabChange }: { activeTab: string, onTabChange: (tab: string) => void }) => {
   return (
     <div className="telegram-safe-bottom fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 pt-2 px-4 flex justify-around items-center z-50 max-w-md mx-auto">
@@ -2545,9 +2539,12 @@ export default function App() {
   const renderLeaderboard = () => (
       <div className="flex flex-col h-full bg-slate-950 pb-20">
           <div className="p-4 bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-10 flex items-center justify-between">
-              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <h2 className="min-w-0 text-xl font-bold text-white flex items-center gap-2">
                  <Trophy className="w-6 h-6 text-yellow-500" /> Таблица Лидеров
               </h2>
+              <div className="ml-3 flex-shrink-0">
+                <BalanceBadge balance={balance} />
+              </div>
           </div>
 
           <div className="p-4 overflow-y-auto custom-scrollbar">
@@ -3001,15 +2998,18 @@ export default function App() {
               <div className="text-[10px] text-slate-500">{`${marketOffers.length} активных предложений`}</div>
             </div>
           </div>
-          <button
-            onClick={() => fetchMarketOffers(marketTabView)}
-            className="w-9 h-9 inline-flex items-center justify-center text-slate-400 border border-slate-700 rounded-md hover:text-white hover:bg-slate-800 disabled:opacity-50"
-            disabled={isLoadingMarket}
-            title="Обновить предложения"
-            aria-label="Обновить предложения"
-          >
-            <RefreshCw className={`w-4 h-4 ${isLoadingMarket ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="ml-3 flex items-center gap-2 flex-shrink-0">
+            <BalanceBadge balance={balance} />
+            <button
+              onClick={() => fetchMarketOffers(marketTabView)}
+              className="w-9 h-9 inline-flex items-center justify-center text-slate-400 border border-slate-700 rounded-md hover:text-white hover:bg-slate-800 disabled:opacity-50"
+              disabled={isLoadingMarket}
+              title="Обновить предложения"
+              aria-label="Обновить предложения"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoadingMarket ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-1 bg-[#090b0e] border border-slate-800 p-1 rounded-lg">
@@ -3228,7 +3228,10 @@ export default function App() {
 
   const renderGamesMenu = () => (
     <div className="h-full min-h-0 p-4 flex flex-col gap-4 pb-24 overflow-y-auto custom-scrollbar">
-      <h2 className="text-2xl font-bold text-white mb-4 px-2">Игры</h2>
+      <div className="mb-4 px-2 flex items-center justify-between gap-3">
+        <h2 className="text-2xl font-bold text-white">Игры</h2>
+        <BalanceBadge balance={balance} />
+      </div>
       
       <button 
         onClick={() => setScreen(AppScreen.CASE_LIST)}
@@ -4175,6 +4178,7 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-2">
+            <BalanceBadge balance={balance} />
             <div className="hidden sm:flex items-center gap-1">
               <div className="text-[10px] text-slate-300 bg-slate-800 px-2 py-1 rounded">�: {formatMoney(playerProfile?.stats_cases_opened || 0)}</div>
               <div className="text-[10px] text-red-300 bg-slate-800 px-2 py-1 rounded">- {formatMoney(playerProfile?.stats_total_spent || 0)}</div>
@@ -4329,23 +4333,6 @@ export default function App() {
       {showWelcomeModal && renderWelcomeModal()}
       {showSettingsModal && renderSettingsModal()}
       {showCreateOfferModal && renderCreateOfferModal()}
-
-      {screen !== AppScreen.ROULETTE &&
-        screen !== AppScreen.DROP_SUMMARY &&
-        screen !== AppScreen.CASE_LIST &&
-        screen !== AppScreen.CASE_DETAIL &&
-        screen !== AppScreen.ROCKET_MENU &&
-        screen !== AppScreen.ROCKET_GAME &&
-        screen !== AppScreen.UPGRADER_MENU &&
-        screen !== AppScreen.UPGRADER_SELECT_TARGET &&
-        screen !== AppScreen.UPGRADER_GAME &&
-        screen !== AppScreen.SLOTS_MENU &&
-        screen !== AppScreen.SLOTS_GAME &&
-        screen !== AppScreen.BUSINESS_MENU &&
-        screen !== AppScreen.MARKET_OFFER &&
-        screen !== AppScreen.PLAYER_PROFILE && (
-        <Header balance={balance} />
-      )}
 
       {screen === AppScreen.GAMES_MENU && renderGamesMenu()}
       {screen === AppScreen.BUSINESS_MENU && renderBusinessMenu()}

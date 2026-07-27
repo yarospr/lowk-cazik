@@ -1,13 +1,14 @@
 ﻿
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2 } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { gameDatabase } from './gameDatabase';
 
 // --- UTILS ---
-const BUILD_MARKER = 'v5069015-r22-online-market';
-const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || '').trim().replace(/^@/, '');
+const BUILD_MARKER = 'v5069015-r23-market-polish';
+const TELEGRAM_BOT_USERNAME = (((import.meta as any).env?.VITE_TELEGRAM_BOT_USERNAME as string) || 'lowkcazikbot').trim().replace(/^@/, '');
 const TELEGRAM_APP_SHORT_NAME = (((import.meta as any).env?.VITE_TELEGRAM_APP_SHORT_NAME as string) || '').trim().replace(/^\//, '');
 const OFFER_ID_PREFIX = 'offer_';
 const ALL_ITEMS = ITEMS_DATA["items_db"];
@@ -710,6 +711,17 @@ const isLowPowerDevice = () => {
     || memory <= 4;
 };
 
+const getRouletteRarityPalette = (rarity: string) => {
+  switch (rarity) {
+    case 'обычный': return { backgroundColor: '#123349', borderColor: '#2c759d', particleColor: 'rgba(125, 211, 252, 0.20)' };
+    case 'редкий': return { backgroundColor: '#133c2a', borderColor: '#2f8f62', particleColor: 'rgba(110, 231, 183, 0.20)' };
+    case 'эпический': return { backgroundColor: '#35204b', borderColor: '#8b5db1', particleColor: 'rgba(216, 180, 254, 0.20)' };
+    case 'мифический': return { backgroundColor: '#481e29', borderColor: '#a94d63', particleColor: 'rgba(253, 164, 175, 0.20)' };
+    case 'легендарный': return { backgroundColor: '#4a390f', borderColor: '#b78a20', particleColor: 'rgba(253, 224, 71, 0.20)' };
+    default: return { backgroundColor: '#1a2028', borderColor: '#46515f', particleColor: 'rgba(203, 213, 225, 0.14)' };
+  }
+};
+
 const Roulette: React.FC<{
   caseData: Case;
   winner: BaseItem;
@@ -774,14 +786,18 @@ const Roulette: React.FC<{
           {strip.map(({ item, chance }, itemIndex) => {
             const rarity = getItemRarity(item);
             const isWinner = itemIndex === winnerIndex;
+            const palette = getRouletteRarityPalette(rarity);
 
             return (
             <div
               key={`${item.id}-${itemIndex}`}
-              className={`roulette-card flex-shrink-0 flex flex-col items-center justify-between relative border bg-[#15191f] ${isWinner && settled ? `${getRarityColor(rarity)} scale-[1.03]` : 'border-slate-700/80 text-white'} rounded-md`}
+              className={`roulette-card rarity-card flex-shrink-0 flex flex-col items-center justify-between relative border text-white ${isWinner && settled ? `${getRarityColor(rarity)} scale-[1.03]` : ''} rounded-md`}
               style={{
                 width: `${cardWidth}px`,
                 height: compact ? '68px' : '124px',
+                backgroundColor: palette.backgroundColor,
+                borderColor: palette.borderColor,
+                '--rarity-particle': palette.particleColor,
               }}
             >
               {!compact && <div className="text-[9px] text-slate-500 w-full text-right px-1.5 pt-1">{chance.toFixed(2)}%</div>}
@@ -814,7 +830,7 @@ const RouletteScreen = ({
   const completedRef = useRef(false);
   const onCompleteRef = useRef(onComplete);
   const [lowPower] = useState(isLowPowerDevice);
-  const compact = droppedItems.length > 1;
+  const compact = droppedItems.length >= 6;
   const durationMs = lowPower ? 1450 : (compact ? 2200 : 2850);
 
   useEffect(() => {
@@ -1617,10 +1633,6 @@ export default function App() {
     if (!playerProfile || !createOfferItem) return;
     const price = Math.max(0, Math.floor(toSafeNumber(createOfferPriceInput)));
     const description = createOfferDescription.trim();
-    if (!description) {
-      alert('Введите описание');
-      return;
-    }
 
     const exists = inventory.some(item => item.uniqueId === createOfferItem.uniqueId);
     if (!exists) {
@@ -2419,87 +2431,123 @@ export default function App() {
 
   const renderCreateOfferModal = () => {
     if (!showCreateOfferModal) return null;
+    const rarity = createOfferItem ? getItemRarity(createOfferItem) : '';
+    const rarityStyle = getMarketRarityStyle(rarity);
 
-    return (
-      <div className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-        <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 shadow-2xl">
+    return createPortal(
+      <div className="fixed inset-0 z-[150] bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4 animate-in fade-in" role="dialog" aria-modal="true" aria-labelledby="create-offer-title">
+        <div className="w-full max-w-sm max-h-[calc(100dvh-24px)] overflow-y-auto bg-[#111419] border border-slate-700 rounded-lg shadow-2xl">
+          <div className="h-14 px-4 flex items-center gap-3 border-b border-slate-800 sticky top-0 z-10 bg-[#111419]">
+            <div className="w-8 h-8 rounded-md bg-emerald-400/10 border border-emerald-400/30 flex items-center justify-center">
+              <Store className="w-4 h-4 text-emerald-300" />
+            </div>
+            <div className="min-w-0">
+              <h3 id="create-offer-title" className="text-sm font-bold text-white">{createdOfferLink ? 'Лот опубликован' : 'Новый лот'}</h3>
+              <div className="text-[9px] text-slate-500">Рынок предметов</div>
+            </div>
+            <button
+              type="button"
+              onClick={closeCreateOfferModal}
+              disabled={isPublishingOffer}
+              className="ml-auto w-8 h-8 inline-flex items-center justify-center border border-slate-700 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-40"
+              aria-label="Закрыть"
+              title="Закрыть"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
           {createdOfferLink ? (
-            <div className="space-y-4">
-              <h3 className="text-lg font-bold text-white">{'Товар опубликован'}</h3>
-              <p className="text-xs text-slate-400 break-all">{createdOfferLink}</p>
+            <div className="p-4 space-y-4">
+              <div className="py-6 text-center border-b border-slate-800">
+                <div className="w-12 h-12 mx-auto mb-3 rounded-md bg-emerald-400/10 border border-emerald-400/30 flex items-center justify-center">
+                  <Check className="w-6 h-6 text-emerald-300" />
+                </div>
+                <div className="font-bold text-white">Предмет появился на рынке</div>
+              </div>
+              <div className="bg-[#090b0e] border border-slate-800 rounded-md px-3 py-2.5 text-[10px] text-slate-400 font-mono break-all">{createdOfferLink}</div>
               <div className="grid grid-cols-2 gap-2">
-                <Button onClick={() => copyText(createdOfferLink)} className="w-full">
-                  {'Копировать'}
-                </Button>
-                <Button onClick={closeCreateOfferModal} variant="secondary" className="w-full">
-                  {'Закрыть'}
-                </Button>
+                <button type="button" onClick={() => copyText(createdOfferLink)} className="h-11 rounded-md bg-emerald-400 text-[#07130e] text-xs font-black uppercase hover:bg-emerald-300">Копировать</button>
+                <button type="button" onClick={closeCreateOfferModal} className="h-11 rounded-md border border-slate-700 text-slate-300 text-xs font-bold uppercase hover:bg-slate-800">Закрыть</button>
               </div>
             </div>
           ) : (
-            <div className="space-y-4">
-              <h3 className="text-lg font-bold text-white">{'Выставить на продажу'}</h3>
+            <div key={createOfferItem?.uniqueId || 'empty'}>
               {createOfferItem && (
-                <div className="flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-xl p-3">
-                  <div className="text-3xl">{createOfferItem.emg}</div>
-                  <div className="min-w-0">
-                    <div className="font-bold text-sm text-white truncate">{getItemName(createOfferItem)}</div>
-                    <div className="text-xs text-slate-400">#{createOfferItem.uniqueId.slice(0, 8)}</div>
+                <div className={`px-4 py-4 flex items-center gap-4 border-b ${rarityStyle.border} ${rarityStyle.bg}`}>
+                  <ItemArtwork item={createOfferItem} className="w-16 h-16 text-5xl flex-shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <span className={`inline-block mb-1 text-[9px] font-bold uppercase ${rarityStyle.text}`}>{rarity}</span>
+                    <div className="font-bold text-white truncate">{getItemName(createOfferItem)}</div>
+                    <div className="text-[9px] text-slate-500 font-mono truncate">{createOfferItem.uniqueId}</div>
                   </div>
                 </div>
               )}
 
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{'Цена'}</label>
-                <input
-                  type="number"
-                  min={0}
-                  value={createOfferPriceInput}
-                  onChange={(e) => setCreateOfferPriceInput(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white outline-none focus:border-yellow-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{'Описание'}</label>
-                <textarea
-                  value={createOfferDescription}
-                  onChange={(e) => setCreateOfferDescription(e.target.value)}
-                  rows={3}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white outline-none focus:border-yellow-500 resize-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{'Доступ'}</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setCreateOfferVisibility('PUBLIC')}
-                    className={`py-2 rounded-lg border text-xs font-bold ${createOfferVisibility === 'PUBLIC' ? 'bg-yellow-500 text-black border-yellow-500' : 'bg-slate-950 text-slate-300 border-slate-700'}`}
-                  >
-                    {'Для всех'}
-                  </button>
-                  <button
-                    onClick={() => setCreateOfferVisibility('LINK_ONLY')}
-                    className={`py-2 rounded-lg border text-xs font-bold ${createOfferVisibility === 'LINK_ONLY' ? 'bg-yellow-500 text-black border-yellow-500' : 'bg-slate-950 text-slate-300 border-slate-700'}`}
-                  >
-                    {'Только по ссылке'}
-                  </button>
+              <div className="p-4 space-y-4">
+                <div>
+                  <label htmlFor="market-offer-price" className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase mb-2"><Star className="w-3.5 h-3.5" /> Цена</label>
+                  <div className="relative">
+                    <input
+                      id="market-offer-price"
+                      name="market-offer-price"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={createOfferPriceInput}
+                      disabled={isPublishingOffer}
+                      onFocus={(event) => event.currentTarget.select()}
+                      onChange={(event) => setCreateOfferPriceInput(event.currentTarget.value.replace(/[^0-9]/g, '').slice(0, 15))}
+                      className="w-full h-12 bg-[#090b0e] border border-slate-700 rounded-md pl-3 pr-10 text-white font-bold outline-none focus:border-emerald-400 disabled:opacity-50"
+                      aria-label="Цена лота"
+                    />
+                    <Star className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-amber-300 fill-amber-300 pointer-events-none" />
+                  </div>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <Button onClick={closeCreateOfferModal} variant="secondary" className="w-full">
-                  {'Отмена'}
-                </Button>
-                <Button onClick={handlePublishOffer} disabled={isPublishingOffer} className="w-full">
-                  {isPublishingOffer ? 'Публикуем...' : 'Опубликовать'}
-                </Button>
+                <div>
+                  <label htmlFor="market-offer-description" className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase mb-2"><Tag className="w-3.5 h-3.5" /> Описание <span className="text-slate-700 normal-case">необязательно</span></label>
+                  <textarea
+                    id="market-offer-description"
+                    name="market-offer-description"
+                    value={createOfferDescription}
+                    disabled={isPublishingOffer}
+                    onChange={(event) => setCreateOfferDescription(event.currentTarget.value.slice(0, 280))}
+                    rows={3}
+                    maxLength={280}
+                    placeholder="Добавьте детали о предмете"
+                    className="w-full bg-[#090b0e] border border-slate-700 rounded-md px-3 py-3 text-sm text-white outline-none focus:border-emerald-400 resize-none disabled:opacity-50 placeholder:text-slate-700"
+                  />
+                  <div className="mt-1 text-right text-[9px] text-slate-600 font-mono">{createOfferDescription.length}/280</div>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase mb-2"><EyeOff className="w-3.5 h-3.5" /> Доступ</div>
+                  <div className="grid grid-cols-2 gap-1 bg-[#090b0e] border border-slate-800 p-1 rounded-md">
+                    <button type="button" disabled={isPublishingOffer} onClick={() => setCreateOfferVisibility('PUBLIC')} className={`h-10 rounded text-xs font-bold flex items-center justify-center gap-1.5 ${createOfferVisibility === 'PUBLIC' ? 'bg-emerald-400 text-[#07130e]' : 'text-slate-400 hover:bg-slate-800'}`}>
+                      <Globe2 className="w-3.5 h-3.5" /> Для всех
+                    </button>
+                    <button type="button" disabled={isPublishingOffer} onClick={() => setCreateOfferVisibility('LINK_ONLY')} className={`h-10 rounded text-xs font-bold flex items-center justify-center gap-1.5 ${createOfferVisibility === 'LINK_ONLY' ? 'bg-emerald-400 text-[#07130e]' : 'text-slate-400 hover:bg-slate-800'}`}>
+                      <Link2 className="w-3.5 h-3.5" /> По ссылке
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => { void handlePublishOffer(); }}
+                  disabled={isPublishingOffer || createOfferPriceInput === ''}
+                  className="w-full h-12 rounded-md bg-emerald-400 text-[#07130e] text-sm font-black uppercase flex items-center justify-center gap-2 hover:bg-emerald-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {isPublishingOffer ? <Loader2 className="w-4 h-4 animate-spin" /> : <Store className="w-4 h-4" />}
+                  {isPublishingOffer ? 'Публикуем' : 'Выставить на рынок'}
+                </button>
               </div>
             </div>
           )}
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   };
 
@@ -3798,14 +3846,14 @@ export default function App() {
 
     return (
       <div className="flex flex-col h-full bg-slate-950 relative">
-        {showSellAllConfirm && (
-          <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-             <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+        {showSellAllConfirm && createPortal(
+          <div className="fixed inset-0 z-[160] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in" role="dialog" aria-modal="true" aria-labelledby="sell-all-title">
+             <div className="bg-[#111419] border border-slate-700 rounded-lg p-6 w-full max-w-sm shadow-2xl">
                 <div className="flex flex-col items-center text-center gap-4">
-                   <div className="w-16 h-16 bg-red-900/30 rounded-full flex items-center justify-center mb-2">
+                   <div className="w-14 h-14 bg-red-500/10 border border-red-500/30 rounded-md flex items-center justify-center mb-2">
                       <AlertTriangle className="w-8 h-8 text-red-500" />
                    </div>
-                   <h3 className="text-xl font-bold text-white">Вы уверены?</h3>
+                   <h3 id="sell-all-title" className="text-xl font-bold text-white">Продать весь инвентарь?</h3>
                    <p className="text-slate-400 text-sm">
                       Вы собираетесь продать <span className="text-white font-bold">{inventory.length} предметов</span> за <span className="text-yellow-400 font-bold">{formatMoney(totalInvValue)}</span> звезд. Это действие нельзя отменить.
                    </p>
@@ -3815,7 +3863,8 @@ export default function App() {
                    </div>
                 </div>
              </div>
-          </div>
+          </div>,
+          document.body,
         )}
 
         <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90 backdrop-blur-sm sticky top-0 z-20">

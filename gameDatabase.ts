@@ -3,7 +3,8 @@ import { createLocalDatabaseClient } from './localDatabase';
 type DatabaseRow = Record<string, any>;
 type MarketView = 'MARKET' | 'MY_OFFERS';
 
-const supabaseUrl = String((import.meta as any).env?.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '');
+const defaultSupabaseUrl = 'https://wucaqpwdfdmasuherfhx.supabase.co';
+const supabaseUrl = String((import.meta as any).env?.VITE_SUPABASE_URL || defaultSupabaseUrl).trim().replace(/\/$/, '');
 const forceLocalDatabase = String((import.meta as any).env?.VITE_FORCE_LOCAL_DB || '') === '1';
 const hasSupabaseUrl = /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(supabaseUrl);
 const localDatabase = createLocalDatabaseClient();

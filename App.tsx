@@ -1004,7 +1004,7 @@ const InventoryGridItem: React.FC<InventoryGridItemProps> = React.memo(({ item, 
   return (
     <button
       onClick={() => onToggle(item.uniqueId)}
-      className={`relative aspect-[4/5] rounded-xl border-2 flex flex-col items-center justify-between p-2 transition-all hover:scale-[1.02] ${isSelected ? 'border-yellow-400 bg-yellow-400/10 shadow-[0_0_15px_rgba(250,204,21,0.3)]' : `${rarityCol} bg-opacity-40`}`}
+      className={`relative aspect-[4/5] rounded-xl border-2 flex flex-col items-center overflow-hidden p-0 transition-all hover:scale-[1.02] ${isSelected ? 'border-yellow-400 bg-yellow-400/10 shadow-[0_0_15px_rgba(250,204,21,0.3)]' : `${rarityCol} bg-opacity-40`}`}
     >
       {isSelected && (
         <div className="absolute top-2 right-2 bg-yellow-400 rounded-full p-0.5 z-20">
@@ -1012,14 +1012,17 @@ const InventoryGridItem: React.FC<InventoryGridItemProps> = React.memo(({ item, 
         </div>
       )}
 
-      <ItemArtwork item={item} className="w-12 h-12 text-4xl mt-2 drop-shadow-lg" />
+      <div className="flex min-h-0 w-full flex-1 flex-col items-center px-2 pt-3 pb-1">
+        <ItemArtwork item={item} className="w-[72px] h-[72px] max-w-full text-5xl drop-shadow-lg" />
 
-      <div className="w-full text-center">
-        <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{displayName}</div>
-        <div className="text-[9px] font-mono text-slate-500">#{item.serial}</div>
-        <div className="mt-1 text-xs font-bold text-yellow-400 flex items-center justify-center gap-0.5 bg-black/30 rounded py-0.5">
-          <Star className="w-2.5 h-2.5 fill-yellow-400" /> {formatMoney(displayPrice)}
+        <div className="mt-auto w-full text-center pb-0.5">
+          <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-0.5">{displayName}</div>
+          <div className="text-[9px] leading-none font-mono text-slate-500">#{item.serial}</div>
         </div>
+      </div>
+
+      <div className="w-full shrink-0 border-t border-black/50 bg-black/45 py-2 text-xs font-bold text-yellow-400 flex items-center justify-center gap-1">
+        <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(displayPrice)}
       </div>
     </button>
   );

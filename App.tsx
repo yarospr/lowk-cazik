@@ -145,17 +145,19 @@ const ItemArtwork = React.memo(({
   className = '',
   imageClassName = '',
   eager = false,
+  style,
 }: {
   item: BaseItem;
   className?: string;
   imageClassName?: string;
   eager?: boolean;
+  style?: React.CSSProperties;
 }) => {
   const imageUrl = getItemImageUrl(item);
   const [failedUrl, setFailedUrl] = useState('');
   const showImage = Boolean(imageUrl && imageUrl !== failedUrl);
   return (
-    <div className={`flex items-center justify-center overflow-hidden ${className}`}>
+    <div className={`flex items-center justify-center overflow-hidden ${className}`} style={style}>
       {showImage ? (
         <img
           src={imageUrl}
@@ -1013,7 +1015,12 @@ const InventoryGridItem: React.FC<InventoryGridItemProps> = React.memo(({ item, 
       )}
 
       <div className="flex min-h-0 w-full flex-1 flex-col items-center px-2 pt-3 pb-1">
-        <ItemArtwork item={item} className="w-[72px] h-[72px] max-w-full text-5xl drop-shadow-lg" />
+        <ItemArtwork
+          item={item}
+          className="max-w-full shrink-0 text-5xl drop-shadow-lg"
+          imageClassName="block"
+          style={{ width: 72, height: 72 }}
+        />
 
         <div className="mt-auto w-full text-center pb-0.5">
           <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-0.5">{displayName}</div>
@@ -3271,12 +3278,12 @@ export default function App() {
       
       <button 
         onClick={() => setScreen(AppScreen.CASE_LIST)}
-        className="bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-yellow-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
+        className="w-full bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-yellow-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
       >
-        <div className="w-20 h-20 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
+        <div className="w-20 h-20 shrink-0 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
           📦
         </div>
-        <div className="text-left">
+        <div className="min-w-0 flex-1 text-left">
           <h3 className="text-xl font-bold text-white mb-1">Кейсы</h3>
           <p className="text-slate-400 text-sm">Испытай удачу открывая кейсы с предметами!</p>
         </div>
@@ -3284,12 +3291,12 @@ export default function App() {
 
       <button 
         onClick={() => setScreen(AppScreen.ROCKET_MENU)}
-        className="bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-purple-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
+        className="w-full bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-purple-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
       >
-        <div className="w-20 h-20 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
+        <div className="w-20 h-20 shrink-0 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
           🚀
         </div>
-        <div className="text-left">
+        <div className="min-w-0 flex-1 text-left">
           <h3 className="text-xl font-bold text-white mb-1">Ракетка</h3>
           <p className="text-slate-400 text-sm">Ставь предметы и успей забрать до краша!</p>
         </div>
@@ -3297,12 +3304,12 @@ export default function App() {
 
       <button 
         onClick={() => setScreen(AppScreen.UPGRADER_MENU)}
-        className="bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-green-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
+        className="w-full bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-green-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
       >
-        <div className="w-20 h-20 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
+        <div className="w-20 h-20 shrink-0 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
           <Zap className="w-10 h-10 text-green-400" />
         </div>
-        <div className="text-left">
+        <div className="min-w-0 flex-1 text-left">
           <h3 className="text-xl font-bold text-white mb-1">Улучшения</h3>
           <p className="text-slate-400 text-sm">Рискни предметом ради более дорогого!</p>
         </div>
@@ -3310,12 +3317,12 @@ export default function App() {
 
       <button 
         onClick={() => setScreen(AppScreen.SLOTS_MENU)}
-        className="bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-red-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
+        className="w-full bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-red-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
       >
-        <div className="w-20 h-20 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
+        <div className="w-20 h-20 shrink-0 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
           <Coins className="w-10 h-10 text-red-400" />
         </div>
-        <div className="text-left">
+        <div className="min-w-0 flex-1 text-left">
           <h3 className="text-xl font-bold text-white mb-1">Слоты</h3>
           <p className="text-slate-400 text-sm">Собери 3 предмета и забери награду!</p>
         </div>
@@ -3323,12 +3330,12 @@ export default function App() {
 
       <button
         onClick={() => setScreen(AppScreen.BUSINESS_MENU)}
-        className="bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-blue-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
+        className="w-full bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-blue-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
       >
-        <div className="w-20 h-20 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
+        <div className="w-20 h-20 shrink-0 bg-slate-950 rounded-xl flex items-center justify-center text-5xl shadow-inner group-hover:scale-110 transition-transform">
           <Banknote className="w-10 h-10 text-blue-400" />
         </div>
-        <div className="text-left">
+        <div className="min-w-0 flex-1 text-left">
           <h3 className="text-xl font-bold text-white mb-1">{'\u0411\u0438\u0437\u043d\u0435\u0441'}</h3>
           <p className="text-slate-400 text-sm">{'\u0412\u043b\u043e\u0436\u0438\u0442\u0435 \u0437\u0432\u0435\u0437\u0434\u044b \u0438 \u043f\u043e\u043b\u0443\u0447\u0430\u0439\u0442\u0435 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u044b \u043a\u0430\u0436\u0434\u0443\u044e \u043c\u0438\u043d\u0443\u0442\u0443.'}</p>
         </div>
@@ -4143,13 +4150,22 @@ export default function App() {
               const glow = getRarityGlow(getItemRarity(item));
               
               return (
-                <div key={item.uniqueId || idx} className={`relative group min-w-0 bg-slate-900 border rounded-lg p-2 flex flex-col items-center overflow-hidden animate-in zoom-in duration-500 fill-mode-backwards ${rarityCol} ${glow}`} style={{animationDelay: `${idx * 70}ms`}}>
-                   <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
-                   <ItemArtwork item={item} className="w-14 h-14 text-4xl mb-2 z-10" />
-                   <div className="w-full min-h-8 font-bold text-white z-10 text-center leading-tight text-[10px] line-clamp-2">{getItemName(item)}</div>
-                   <div className="text-[9px] text-slate-400 mt-1 font-mono z-10">{getPermanentItemId(item)}</div>
-                   <div className="mt-2 max-w-full px-2 py-1 bg-black/40 rounded text-yellow-400 text-[10px] font-bold flex items-center gap-1 z-10 border border-yellow-500/20">
-                      <Star className="w-2.5 h-2.5 fill-yellow-400 flex-shrink-0" /> <span className="truncate">{formatMoney(getItemPrice(item))}</span>
+                <div key={item.uniqueId || idx} className={`relative group min-w-0 bg-slate-900 border rounded-lg p-0 flex flex-col items-center overflow-hidden animate-in zoom-in duration-500 fill-mode-backwards ${rarityCol} ${glow}`} style={{animationDelay: `${idx * 70}ms`}}>
+                   <div className="relative flex min-h-0 w-full flex-1 flex-col items-center px-2 pt-3 pb-1">
+                     <div className="absolute inset-0 bg-gradient-to-t from-black/35 to-transparent pointer-events-none" />
+                     <ItemArtwork
+                       item={item}
+                       className="max-w-full shrink-0 text-5xl drop-shadow-lg z-10"
+                       imageClassName="block"
+                       style={{ width: 72, height: 72 }}
+                     />
+                     <div className="mt-auto w-full text-center z-10 pb-0.5">
+                       <div className="w-full font-bold text-white leading-tight text-[10px] truncate">{getItemName(item)}</div>
+                       <div className="text-[9px] leading-none text-slate-400 mt-0.5 font-mono">{getPermanentItemId(item)}</div>
+                     </div>
+                   </div>
+                   <div className="w-full shrink-0 border-t border-black/50 bg-black/55 py-2 text-yellow-400 text-xs font-bold flex items-center justify-center gap-1 z-10">
+                     <Star className="w-3 h-3 fill-yellow-400 shrink-0" /> <span className="truncate">{formatMoney(getItemPrice(item))}</span>
                    </div>
                 </div>
               )

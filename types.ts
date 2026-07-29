@@ -5,6 +5,7 @@ export interface BaseItem {
   цена: number;
   редкость: string;
   emg: string;
+  image_url?: string;
 }
 
 export interface CaseItemDrop {

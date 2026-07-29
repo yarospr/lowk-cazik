@@ -20,6 +20,14 @@ const ITEM_RARITY_KEY = '\u0440\u0435\u0434\u043a\u043e\u0441\u0442\u044c';
 const BUSINESS_TICK_MS = 60_000;
 const MAX_INVENTORY_ITEMS = 5000;
 const INVENTORY_LIMIT_MESSAGE = '\u041d\u0435\u043b\u044c\u0437\u044f \u0438\u043c\u0435\u0442\u044c \u0431\u043e\u043b\u0435\u0435 5 000 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u043e\u0432';
+// Temporary resolution comparison from https://picsum.photos/seed/lowk-texture-test/1200/1200.
+const ITEM_IMAGE_URL_BY_ID = new Map<number, string>([
+  [1, './assets/items/resolution-test/item-1024.webp'],
+  [2, './assets/items/resolution-test/item-512.webp'],
+  [3, './assets/items/resolution-test/item-256.webp'],
+  [4, './assets/items/resolution-test/item-128.webp'],
+  [5, './assets/items/resolution-test/item-64.webp'],
+]);
 
 type BusinessRewardNotice = {
   item: InventoryItem;
@@ -119,8 +127,8 @@ const getRarityGlow = (rarity: string) => {
 
 const getItemImageUrl = (item: BaseItem): string => {
   const record = item as unknown as Record<string, unknown>;
-  for (const key of ['image_url', 'image', 'img']) {
-    const value = record[key];
+  const candidates = [record.image_url, record.image, record.img, ITEM_IMAGE_URL_BY_ID.get(item.id)];
+  for (const value of candidates) {
     if (typeof value !== 'string' || !value.trim()) continue;
     try {
       const resolved = new URL(value.trim(), window.location.href);
@@ -136,21 +144,27 @@ const ItemArtwork = React.memo(({
   item,
   className = '',
   imageClassName = '',
+  eager = false,
 }: {
   item: BaseItem;
   className?: string;
   imageClassName?: string;
+  eager?: boolean;
 }) => {
   const imageUrl = getItemImageUrl(item);
+  const [failedUrl, setFailedUrl] = useState('');
+  const showImage = Boolean(imageUrl && imageUrl !== failedUrl);
   return (
     <div className={`flex items-center justify-center overflow-hidden ${className}`}>
-      {imageUrl ? (
+      {showImage ? (
         <img
           src={imageUrl}
           alt=""
-          loading="eager"
+          loading={eager ? 'eager' : 'lazy'}
+          fetchPriority={eager ? 'high' : 'auto'}
           decoding="async"
           draggable={false}
+          onError={() => setFailedUrl(imageUrl)}
           className={`w-full h-full object-contain select-none ${imageClassName}`}
         />
       ) : (
@@ -849,7 +863,7 @@ const Roulette: React.FC<{
               }}
             >
               {!compact && <div className="text-[9px] text-slate-500 w-full text-right px-1.5 pt-1">{chance.toFixed(2)}%</div>}
-              <ItemArtwork item={item} className={compact ? 'text-3xl w-10 h-10 mt-3' : 'text-5xl w-16 h-16'} />
+              <ItemArtwork item={item} eager className={compact ? 'text-3xl w-10 h-10 mt-3' : 'text-5xl w-16 h-16'} />
               <div className={`w-full text-center leading-tight font-bold text-slate-200 truncate ${compact ? 'text-[8px] px-1 pb-1' : 'text-[9px] px-1.5 pb-2'}`}>
                 {getItemName(item)}
               </div>
@@ -998,7 +1012,7 @@ const InventoryGridItem: React.FC<InventoryGridItemProps> = React.memo(({ item, 
         </div>
       )}
 
-      <div className="text-4xl mt-2 drop-shadow-lg">{item.emg}</div>
+      <ItemArtwork item={item} className="w-12 h-12 text-4xl mt-2 drop-shadow-lg" />
 
       <div className="w-full text-center">
         <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{displayName}</div>
@@ -2699,9 +2713,7 @@ export default function App() {
               ) : (
                 selectedPlayerProfile.inventory.map((item) => (
                   <div key={item.uniqueId} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center gap-3">
-                    <div className="w-12 h-12 bg-slate-800 rounded-lg border border-slate-700 flex items-center justify-center text-2xl">
-                      {item.emg}
-                    </div>
+                    <ItemArtwork item={item} className="w-12 h-12 bg-slate-800 rounded-lg border border-slate-700 text-2xl" />
                     <div className="min-w-0 flex-1">
                       <div className="font-bold text-sm text-white truncate">{getItemName(item)}</div>
                       <div className="text-[11px] text-slate-500 font-mono">{`ID: ${getPermanentItemId(item)}`}</div>
@@ -2889,9 +2901,7 @@ export default function App() {
               className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-left hover:border-yellow-500/40 transition-all"
             >
               <div className="flex items-start gap-3">
-                <div className="w-12 h-12 bg-slate-800 border border-slate-700 rounded-lg flex items-center justify-center text-2xl">
-                  {offer.item.emg}
-                </div>
+                <ItemArtwork item={offer.item} className="w-12 h-12 bg-slate-800 border border-slate-700 rounded-lg text-2xl" />
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-white text-sm truncate">{getItemName(offer.item)}</div>
                   <div className="text-[11px] text-slate-400">{`ID: ${offer.item.uniqueId.slice(0, 10)}`}</div>
@@ -2965,9 +2975,7 @@ export default function App() {
         <div className="p-4 pb-24 overflow-y-auto custom-scrollbar space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
             <div className="flex items-start gap-3">
-              <div className="w-14 h-14 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center text-3xl">
-                {offer.item.emg}
-              </div>
+              <ItemArtwork item={offer.item} className="w-14 h-14 bg-slate-800 border border-slate-700 rounded-xl text-3xl" />
               <div className="min-w-0 flex-1">
                 <div className="font-bold text-white">{getItemName(offer.item)}</div>
                 <div className="text-xs text-slate-400">{`ID: ${offer.item.uniqueId}`}</div>
@@ -3422,9 +3430,7 @@ export default function App() {
                 <div className="bg-slate-950 border border-yellow-500/40 rounded-xl p-4">
                   <div className="text-xs uppercase text-slate-500 font-bold mb-3">{'\u041d\u043e\u0432\u044b\u0439 \u043f\u0440\u0435\u0434\u043c\u0435\u0442'}</div>
                   <div className="flex items-center gap-3">
-                    <div className="w-14 h-14 rounded-xl bg-slate-900 border border-slate-700 flex items-center justify-center text-3xl">
-                      {pendingReward.item.emg}
-                    </div>
+                    <ItemArtwork item={pendingReward.item} className="w-14 h-14 rounded-xl bg-slate-900 border border-slate-700 text-3xl" />
                     <div className="flex-1 min-w-0">
                       <div className="font-bold text-white text-sm truncate">{getItemName(pendingReward.item)}</div>
                       <div className="text-xs text-slate-400">#{pendingReward.item.serial.toString().padStart(4, '0')}</div>
@@ -3495,7 +3501,7 @@ export default function App() {
                           }}
                           className={`relative aspect-[4/5] rounded-xl border-2 flex flex-col items-center justify-between p-2 transition-all hover:scale-[1.02] ${rarityCol} bg-opacity-40`}
                       >
-                          <div className="text-4xl mt-2 drop-shadow-lg">{item.emg}</div>
+                          <ItemArtwork item={item} className="w-12 h-12 text-4xl mt-2 drop-shadow-lg" />
                           <div className="w-full text-center">
                               <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{getItemName(item)}</div>
                               <div className="mt-1 text-xs font-bold text-yellow-400 flex items-center justify-center gap-0.5 bg-black/30 rounded py-0.5">
@@ -3544,7 +3550,7 @@ export default function App() {
                         {rocketWinnings && (
                             <div className="mt-6 bg-slate-900/80 p-4 rounded-xl border border-green-500/30 flex flex-col items-center gap-2">
                                 <span className="text-xs text-slate-400 uppercase">Выигран предмет</span>
-                                <span className="text-4xl">{rocketWinnings.emg}</span>
+                                <ItemArtwork item={rocketWinnings} className="w-14 h-14 text-4xl" />
                                 <span className="font-bold text-white">{getItemName(rocketWinnings)}</span>
                                 <span className="text-yellow-400 font-bold flex items-center gap-1 text-sm">
                                     <Star className="w-3 h-3 fill-yellow-400" /> {formatMoney(getItemPrice(rocketWinnings))}
@@ -3571,7 +3577,7 @@ export default function App() {
                 {rocketState === 'IDLE' && rocketBetItem && (
                     <div className="flex flex-col gap-4">
                         <div className="flex items-center gap-3 bg-slate-800 p-3 rounded-xl border border-slate-700">
-                            <div className="text-3xl">{rocketBetItem.emg}</div>
+                            <ItemArtwork item={rocketBetItem} className="w-10 h-10 text-3xl flex-shrink-0" />
                             <div className="flex-1 min-w-0">
                                 <div className="text-sm font-bold truncate">{getItemName(rocketBetItem)}</div>
                                 <div className="text-xs text-yellow-400 flex items-center gap-1"><Star className="w-3 h-3 fill-yellow-400"/> {formatMoney(getItemPrice(rocketBetItem))}</div>
@@ -3632,7 +3638,7 @@ export default function App() {
                           }}
                           className={`relative aspect-[4/5] rounded-xl border-2 flex flex-col items-center justify-between p-2 transition-all hover:scale-[1.02] ${rarityCol} bg-opacity-40`}
                       >
-                          <div className="text-4xl mt-2 drop-shadow-lg">{item.emg}</div>
+                          <ItemArtwork item={item} className="w-12 h-12 text-4xl mt-2 drop-shadow-lg" />
                           <div className="w-full text-center">
                               <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-1">{getItemName(item)}</div>
                               <div className="mt-1 text-xs font-bold text-yellow-400 flex items-center justify-center gap-0.5 bg-black/30 rounded py-0.5">
@@ -3668,9 +3674,7 @@ export default function App() {
             </div>
 
             <div className="p-4 bg-slate-900 border-b border-slate-800 flex items-center gap-3">
-                <div className="w-12 h-12 flex items-center justify-center text-3xl bg-slate-800 rounded-lg">
-                    {upgraderBetItem.emg}
-                </div>
+                <ItemArtwork item={upgraderBetItem} className="w-12 h-12 text-3xl bg-slate-800 rounded-lg" />
                 <div>
                     <div className="text-xs text-slate-500 uppercase font-bold">Ваша ставка</div>
                     <div className="font-bold text-sm">{getItemName(upgraderBetItem)}</div>
@@ -3698,7 +3702,7 @@ export default function App() {
                                 className={`w-full bg-slate-900 border-l-4 rounded-r-xl p-3 flex items-center justify-between hover:bg-slate-800 transition-all active:scale-[0.98] ${rarityCol.replace('border', 'border-l')}`}
                             >
                                 <div className="flex items-center gap-3">
-                                    <div className="text-3xl">{target.emg}</div>
+                                    <ItemArtwork item={target} className="w-10 h-10 text-3xl flex-shrink-0" />
                                     <div className="text-left">
                                         <div className="font-bold text-sm text-white">{getItemName(target)}</div>
                                         <div className="text-xs text-yellow-400 font-bold flex items-center gap-1">
@@ -3788,7 +3792,7 @@ export default function App() {
                    {/* Items Info */}
                    <div className="flex items-center gap-4 px-6 w-full max-w-sm">
                         <div className={`flex-1 bg-slate-900 border rounded-xl p-3 flex flex-col items-center relative ${upgraderSpinState === 'WIN' ? 'opacity-30 grayscale' : 'border-slate-700'}`}>
-                             <div className="text-3xl mb-1">{upgraderBetItem.emg}</div>
+                             <ItemArtwork item={upgraderBetItem} className="w-11 h-11 text-3xl mb-1" />
                              <div className="text-xs font-bold text-center leading-tight">{getItemName(upgraderBetItem)}</div>
                              <div className="text-xs text-yellow-500 mt-1">{formatMoney(getItemPrice(upgraderBetItem))}</div>
                              {upgraderSpinState === 'LOSE' && <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-xl text-red-500 font-bold text-xl rotate-12 uppercase border-2 border-red-500">Потеряно</div>}
@@ -3797,7 +3801,7 @@ export default function App() {
                         <div className="text-slate-500"><ArrowRightIcon /></div>
 
                         <div className={`flex-1 bg-slate-900 border rounded-xl p-3 flex flex-col items-center relative ${upgraderSpinState === 'LOSE' ? 'opacity-30 grayscale' : 'border-green-500/50 bg-green-900/10'}`}>
-                             <div className="text-3xl mb-1">{upgraderTargetItem.emg}</div>
+                             <ItemArtwork item={upgraderTargetItem} className="w-11 h-11 text-3xl mb-1" />
                              <div className="text-xs font-bold text-center leading-tight">{getItemName(upgraderTargetItem)}</div>
                              <div className="text-xs text-yellow-500 mt-1">{formatMoney(getItemPrice(upgraderTargetItem))}</div>
                              {upgraderSpinState === 'WIN' && <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-xl text-green-400 font-bold text-xl -rotate-12 uppercase border-2 border-green-500">Получено</div>}
@@ -3931,7 +3935,7 @@ export default function App() {
                                         className="flex flex-col items-center justify-center shrink-0"
                                         style={{ height: `${ITEM_HEIGHT}px` }}
                                       >
-                                          <div className="text-5xl mb-2 drop-shadow-lg">{itemData.item.emg}</div>
+                                          <ItemArtwork item={itemData.item} className="w-16 h-16 text-5xl mb-2 drop-shadow-lg" />
                                           <div className="text-[10px] font-bold text-slate-300 text-center leading-none px-1 line-clamp-2 max-w-full">
                                               {getItemName(itemData.item)}
                                           </div>
@@ -3955,7 +3959,7 @@ export default function App() {
                                 <div className="text-white mt-1">Получен предмет:</div>
                                 <div className="text-xl font-bold flex flex-col items-center justify-center text-yellow-400 mt-2 bg-slate-900 px-4 py-2 rounded-xl border border-yellow-500/50">
                                      <div className="flex items-center gap-2">
-                                        {slotsWinItem.emg} {getItemName(slotsWinItem)}
+                                        <ItemArtwork item={slotsWinItem} className="w-8 h-8 text-2xl" /> {getItemName(slotsWinItem)}
                                      </div>
                                      <div className="text-sm text-slate-400 mt-1">
                                         Цена: {formatMoney(getItemPrice(slotsWinItem))}
@@ -4091,9 +4095,7 @@ export default function App() {
                {drops.map((item) => (
                  <div key={item.id} className={`flex items-center justify-between p-2 rounded-r-lg border-l-4 bg-slate-900/50 ${getRarityColor(getItemRarity(item)).replace('border', 'border-l')}`}>
                    <div className="flex items-center gap-3">
-                     <div className="w-10 h-10 bg-slate-800 rounded flex items-center justify-center text-xl shadow-inner">
-                       {item.emg}
-                     </div>
+                     <ItemArtwork item={item} className="w-10 h-10 bg-slate-800 rounded text-xl shadow-inner" />
                      <div>
                        <div className="font-bold text-sm text-slate-200">{getItemName(item)}</div>
                        <div className="text-[10px] text-slate-400 uppercase tracking-wide">{getItemRarity(item)}</div>

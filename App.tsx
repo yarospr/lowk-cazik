@@ -405,6 +405,10 @@ type TelegramWebAppState = {
   };
   ready?: () => void;
   expand?: () => void;
+  requestFullscreen?: () => void;
+  setHeaderColor?: (color: string) => void;
+  setBackgroundColor?: (color: string) => void;
+  setBottomBarColor?: (color: string) => void;
   openTelegramLink?: (url: string) => void;
 };
 
@@ -1023,8 +1027,8 @@ const InventoryGridItem: React.FC<InventoryGridItemProps> = React.memo(({ item, 
           style={{ width: 72, height: 72 }}
         />
 
-        <div className="mt-auto w-full text-center pb-0.5">
-          <div className="text-[10px] font-bold text-slate-300 truncate leading-tight mb-0.5">{displayName}</div>
+        <div className="mt-auto w-full text-center pb-0.5 relative -top-1">
+          <div className="text-[11px] font-bold text-slate-300 truncate leading-tight mb-0.5">{displayName}</div>
           <div className="text-[9px] leading-none font-mono text-slate-500">#{item.serial}</div>
         </div>
       </div>
@@ -1272,6 +1276,31 @@ export default function App() {
   }, [initialOfferId]);
 
   // --- INITIALIZATION ---
+  useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+    if (!tg) return;
+
+    // Telegram owns the native chrome around a Mini App.  Keep every
+    // supported launch surface on the same dark palette, then request the
+    // full-screen mode where the client supports it. Unsupported clients
+    // simply keep their normal header and ignore these optional methods.
+    const appBackground = '#020617';
+    const bottomBar = '#0f172a';
+    try {
+      tg.setHeaderColor?.(appBackground);
+      tg.setBackgroundColor?.(appBackground);
+      tg.setBottomBarColor?.(bottomBar);
+    } catch {
+      // Older Telegram clients can expose the object without newer methods.
+    }
+    try {
+      tg.expand?.();
+      tg.requestFullscreen?.();
+    } catch {
+      // Fullscreen is optional and may be declined by the host client.
+    }
+  }, []);
+
   useEffect(() => {
     const initPlayer = async () => {
       const tg = window.Telegram?.WebApp;
@@ -4176,8 +4205,8 @@ export default function App() {
                        imageClassName="block"
                        style={{ width: 72, height: 72 }}
                      />
-                     <div className="mt-auto w-full text-center z-10 pb-0.5">
-                       <div className="w-full font-bold text-white leading-tight text-[10px] truncate">{getItemName(item)}</div>
+                     <div className="mt-auto w-full text-center z-10 pb-0.5 relative -top-1">
+                       <div className="w-full font-bold text-white leading-tight text-[11px] truncate">{getItemName(item)}</div>
                        <div className="text-[9px] leading-none text-slate-400 mt-0.5 font-mono">{getPermanentItemId(item)}</div>
                      </div>
                    </div>

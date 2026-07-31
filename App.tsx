@@ -1026,7 +1026,7 @@ const InventoryGridItem: React.FC<InventoryGridItemProps> = React.memo(({ item, 
           item={item}
           className="max-w-full shrink-0 text-5xl drop-shadow-lg"
           imageClassName="block"
-          style={{ width: 72, height: 72 }}
+          style={{ width: 101, height: 101 }}
         />
 
         <div className="mt-auto w-full text-center pb-0.5 relative -top-1">
@@ -4289,11 +4289,6 @@ export default function App() {
           
           <div className="flex items-center gap-2">
             <BalanceBadge balance={balance} />
-            <div className="hidden sm:flex items-center gap-1">
-              <div className="text-[10px] text-slate-300 bg-slate-800 px-2 py-1 rounded">�: {formatMoney(playerProfile?.stats_cases_opened || 0)}</div>
-              <div className="text-[10px] text-red-300 bg-slate-800 px-2 py-1 rounded">- {formatMoney(playerProfile?.stats_total_spent || 0)}</div>
-              <div className="text-[10px] text-green-300 bg-slate-800 px-2 py-1 rounded">+ {formatMoney(playerProfile?.stats_total_won || 0)}</div>
-            </div>
              <button
                onClick={() => {
                  setInputName(playerProfile?.name || '');

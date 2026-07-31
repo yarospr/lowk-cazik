@@ -405,7 +405,10 @@ type TelegramWebAppState = {
   };
   ready?: () => void;
   expand?: () => void;
+  isFullscreen?: boolean;
   requestFullscreen?: () => void;
+  onEvent?: (eventType: string, callback: () => void) => void;
+  offEvent?: (eventType: string, callback: () => void) => void;
   setHeaderColor?: (color: string) => void;
   setBackgroundColor?: (color: string) => void;
   setBottomBarColor?: (color: string) => void;
@@ -1047,6 +1050,7 @@ export default function App() {
   const [playerProfile, setPlayerProfile] = useState<PlayerProfile | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isTelegramUser, setIsTelegramUser] = useState(false);
+  const [isTelegramFullscreen, setIsTelegramFullscreen] = useState(false);
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
   const [accessBlocked, setAccessBlocked] = useState(false);
   const [initializationError, setInitializationError] = useState<string | null>(null);
@@ -1280,6 +1284,11 @@ export default function App() {
     const tg = window.Telegram?.WebApp;
     if (!tg) return;
 
+    const syncFullscreenState = () => setIsTelegramFullscreen(Boolean(tg.isFullscreen));
+    tg.onEvent?.('fullscreenChanged', syncFullscreenState);
+    tg.onEvent?.('fullscreenFailed', syncFullscreenState);
+    syncFullscreenState();
+
     // Telegram owns the native chrome around a Mini App.  Keep every
     // supported launch surface on the same dark palette, then request the
     // full-screen mode where the client supports it. Unsupported clients
@@ -1294,11 +1303,21 @@ export default function App() {
       // Older Telegram clients can expose the object without newer methods.
     }
     try {
+      tg.ready?.();
       tg.expand?.();
       tg.requestFullscreen?.();
     } catch {
       // Fullscreen is optional and may be declined by the host client.
     }
+
+    // Some Android builds update isFullscreen one frame later without
+    // dispatching the event immediately.
+    const fullscreenCheck = window.setTimeout(syncFullscreenState, 350);
+    return () => {
+      window.clearTimeout(fullscreenCheck);
+      tg.offEvent?.('fullscreenChanged', syncFullscreenState);
+      tg.offEvent?.('fullscreenFailed', syncFullscreenState);
+    };
   }, []);
 
   useEffect(() => {
@@ -4435,7 +4454,7 @@ export default function App() {
   }
 
   return (
-    <div className={`telegram-app-frame ${initialOfferId ? 'telegram-offer-entry' : ''} bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-x-hidden overflow-y-auto`}>
+    <div className={`telegram-app-frame ${isTelegramFullscreen ? 'telegram-fullscreen-guard' : ''} ${initialOfferId ? 'telegram-offer-entry' : ''} bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-x-hidden overflow-y-auto`}>
       {uiToast && createPortal(
         <div className="telegram-toast fixed left-1/2 z-[220] -translate-x-1/2 px-4 py-3 bg-[#171c22] border border-emerald-400/35 rounded-md shadow-2xl text-xs font-bold text-white flex items-center gap-2" role="status">
           <Check className="w-4 h-4 text-emerald-300" /> {uiToast}

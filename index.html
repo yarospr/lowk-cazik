@@ -36,6 +36,10 @@
         padding-top: var(--tg-content-safe-area-inset-top, 0px);
         box-sizing: border-box;
       }
+      .telegram-app-frame.telegram-fullscreen-guard {
+        /* Space reserved for Telegram's floating Close/menu controls. */
+        padding-top: max(var(--tg-content-safe-area-inset-top, 0px), 56px);
+      }
       .telegram-app-frame.telegram-offer-entry {
         padding-top: max(var(--tg-content-safe-area-inset-top, 0px), 72px);
       }

@@ -802,7 +802,7 @@ const Roulette: React.FC<{
 }> = React.memo(({ caseData, winner, compact, lowPower, durationMs, index, settled }) => {
   const cardWidth = compact ? 72 : 104;
   const gap = compact ? 6 : 8;
-  const totalItems = lowPower ? (compact ? 8 : 15) : (compact ? 10 : 22);
+  const totalItems = lowPower ? (compact ? 10 : 15) : (compact ? 13 : 22);
   const winnerIndex = totalItems - (compact ? 3 : 5);
   const [strip] = useState<RouletteStripEntry[]>(() => buildRouletteStrip(caseData, winner, totalItems, winnerIndex));
   const [isSpinning, setIsSpinning] = useState(false);
@@ -899,7 +899,9 @@ const RouletteScreen = ({
   const onCompleteRef = useRef(onComplete);
   const [lowPower] = useState(isLowPowerDevice);
   const compact = droppedItems.length >= 6;
-  const durationMs = lowPower ? 1450 : (compact ? 2200 : 2850);
+  const durationMs = compact
+    ? (lowPower ? 1800 : 2600)
+    : (lowPower ? 1450 : 2850);
 
   useEffect(() => {
     onCompleteRef.current = onComplete;

@@ -20,14 +20,11 @@ const ITEM_RARITY_KEY = '\u0440\u0435\u0434\u043a\u043e\u0441\u0442\u044c';
 const BUSINESS_TICK_MS = 60_000;
 const MAX_INVENTORY_ITEMS = 5000;
 const INVENTORY_LIMIT_MESSAGE = '\u041d\u0435\u043b\u044c\u0437\u044f \u0438\u043c\u0435\u0442\u044c \u0431\u043e\u043b\u0435\u0435 5 000 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u043e\u0432';
-// Temporary resolution comparison from https://picsum.photos/seed/lowk-texture-test/1200/1200.
-const ITEM_IMAGE_URL_BY_ID = new Map<number, string>([
-  [1, './assets/items/resolution-test/item-1024.webp'],
-  [2, './assets/items/resolution-test/item-512.webp'],
-  [3, './assets/items/resolution-test/item-256.webp'],
-  [4, './assets/items/resolution-test/item-128.webp'],
-  [5, './assets/items/resolution-test/item-64.webp'],
-]);
+const getBundledItemImageUrl = (itemId: number): string => {
+  return Number.isInteger(itemId) && itemId > 0
+    ? `./assets/items/icons/${itemId}.png`
+    : '';
+};
 
 type BusinessRewardNotice = {
   item: InventoryItem;
@@ -127,7 +124,7 @@ const getRarityGlow = (rarity: string) => {
 
 const getItemImageUrl = (item: BaseItem): string => {
   const record = item as unknown as Record<string, unknown>;
-  const candidates = [record.image_url, record.image, record.img, ITEM_IMAGE_URL_BY_ID.get(item.id)];
+  const candidates = [record.image_url, record.image, record.img, getBundledItemImageUrl(item.id)];
   for (const value of candidates) {
     if (typeof value !== 'string' || !value.trim()) continue;
     try {

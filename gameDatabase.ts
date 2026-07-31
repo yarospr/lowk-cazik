@@ -8,18 +8,23 @@ const supabaseUrl = String((import.meta as any).env?.VITE_SUPABASE_URL || defaul
 const forceLocalDatabase = String((import.meta as any).env?.VITE_FORCE_LOCAL_DB || '') === '1';
 const hasSupabaseUrl = /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(supabaseUrl);
 const localDatabase = createLocalDatabaseClient();
+const supabaseProjectRef = hasSupabaseUrl ? new URL(supabaseUrl).hostname.split('.')[0] : '';
+const primaryGameApiUrl = `${supabaseUrl}/functions/v1/game-api`;
+const fallbackGameApiUrl = supabaseProjectRef
+  ? `https://${supabaseProjectRef}.functions.supabase.co/game-api`
+  : primaryGameApiUrl;
 
 export const isOnlineDatabaseConfigured = hasSupabaseUrl && !forceLocalDatabase;
 
 const getTelegramInitData = () => String(window.Telegram?.WebApp?.initData || '').trim();
 const shouldUseOnlineDatabase = () => isOnlineDatabaseConfigured && Boolean(getTelegramInitData());
 
-const invoke = async <T>(action: string, payload: DatabaseRow = {}): Promise<T> => {
+const invokeEndpoint = async <T>(url: string, action: string, payload: DatabaseRow = {}): Promise<T> => {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 12_000);
+  const timeout = window.setTimeout(() => controller.abort(), 8_000);
 
   try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/game-api`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, payload, initData: getTelegramInitData() }),
@@ -35,6 +40,15 @@ const invoke = async <T>(action: string, payload: DatabaseRow = {}): Promise<T> 
     throw error;
   } finally {
     window.clearTimeout(timeout);
+  }
+};
+
+const invoke = async <T>(action: string, payload: DatabaseRow = {}): Promise<T> => {
+  try {
+    return await invokeEndpoint<T>(primaryGameApiUrl, action, payload);
+  } catch (error) {
+    if (!(error instanceof TypeError) || fallbackGameApiUrl === primaryGameApiUrl) throw error;
+    return invokeEndpoint<T>(fallbackGameApiUrl, action, payload);
   }
 };
 

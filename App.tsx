@@ -1006,7 +1006,8 @@ const InventoryGridItem: React.FC<InventoryGridItemProps> = React.memo(({ item, 
   return (
     <button
       onClick={() => onToggle(item.uniqueId)}
-      className={`relative aspect-[4/5] rounded-xl border-2 flex flex-col items-center overflow-hidden p-0 transition-all hover:scale-[1.02] ${isSelected ? 'border-yellow-400 bg-yellow-400/10 shadow-[0_0_15px_rgba(250,204,21,0.3)]' : `${rarityCol} bg-opacity-40`}`}
+      className={`relative w-full rounded-xl border-2 flex flex-col items-center overflow-hidden p-0 transition-all hover:scale-[1.02] ${isSelected ? 'border-yellow-400 bg-yellow-400/10 shadow-[0_0_15px_rgba(250,204,21,0.3)]' : `${rarityCol} bg-opacity-40`}`}
+      style={{ height: 176 }}
     >
       {isSelected && (
         <div className="absolute top-2 right-2 bg-yellow-400 rounded-full p-0.5 z-20">
@@ -1044,6 +1045,8 @@ export default function App() {
   const [isTelegramUser, setIsTelegramUser] = useState(false);
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
   const [accessBlocked, setAccessBlocked] = useState(false);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
+  const [initializationAttempt, setInitializationAttempt] = useState(0);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   
   // Registration / Settings form state
@@ -1277,6 +1280,7 @@ export default function App() {
       const tgUser = tg?.initDataUnsafe?.user;
       const isTg = Boolean(tgUser?.id);
       setIsTelegramUser(isTg);
+      setInitializationError(null);
       if (initialOfferId && !isTg) {
         setIsTelegramRequiredForOffer(true);
         setIsLoaded(true);
@@ -1310,6 +1314,13 @@ export default function App() {
             return;
           }
           console.error('Failed to initialize player profile', error);
+          if (isTg) {
+            setPlayerProfile(null);
+            setInitializationError(message || '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043f\u0440\u043e\u0444\u0438\u043b\u044c');
+            setShowWelcomeModal(false);
+            setIsLoaded(true);
+            return;
+          }
           setPlayerProfile({
             id: userId,
             name: tgUser?.first_name || '',
@@ -1352,7 +1363,13 @@ export default function App() {
     };
 
     initPlayer();
-  }, [initialOfferId]);
+  }, [initialOfferId, initializationAttempt]);
+
+  const retryInitialization = () => {
+    setInitializationError(null);
+    setIsLoaded(false);
+    setInitializationAttempt(previous => previous + 1);
+  };
 
   const grantBusinessReward = useCallback((dropAt = Date.now()) => {
     setBusinessState(prev => {
@@ -4270,7 +4287,10 @@ export default function App() {
           </div>
         </div>
 
-        <div className="p-4 pb-32 grid grid-cols-3 gap-3 overflow-y-auto custom-scrollbar">
+        <div
+          className="flex-1 min-h-0 p-4 pb-32 grid grid-cols-3 content-start items-start gap-3 overflow-y-auto custom-scrollbar"
+          style={{ gridAutoRows: '176px' }}
+        >
             {isSellAllPending ? (
                 <div className="col-span-3 py-20 text-center text-slate-500">Продажа всех предметов...</div>
             ) : inventory.length === 0 ? (
@@ -4322,6 +4342,25 @@ export default function App() {
         </div>
         <h1 className="text-2xl font-black">Доступ заблокирован</h1>
         <p className="mt-3 text-sm text-slate-400">Вы были заблокированы администратором.</p>
+      </div>
+    );
+  }
+
+  if (initializationError && isTelegramUser) {
+    return (
+      <div className="telegram-app-frame min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center px-8 text-center">
+        <div className="w-16 h-16 rounded-full bg-yellow-500/10 border border-yellow-500/30 flex items-center justify-center mb-5">
+          <RefreshCw className="w-8 h-8 text-yellow-400" />
+        </div>
+        <h1 className="text-2xl font-black">Не удалось подключиться</h1>
+        <p className="mt-3 text-sm text-slate-400">Профиль сохранен. Проверьте соединение и попробуйте еще раз.</p>
+        <button
+          type="button"
+          onClick={retryInitialization}
+          className="mt-6 w-full max-w-xs h-12 rounded-lg bg-yellow-500 text-black text-sm font-black uppercase flex items-center justify-center gap-2 active:scale-95 transition-transform"
+        >
+          <RefreshCw className="w-4 h-4" /> Повторить
+        </button>
       </div>
     );
   }

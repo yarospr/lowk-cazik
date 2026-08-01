@@ -142,6 +142,23 @@ export const gameDatabase = {
     });
   },
 
+  async playPlinko(bet: number, idempotencyKey: string) {
+    return invoke<{
+      player: DatabaseRow;
+      result: {
+        bet: number;
+        path: number[];
+        prizes: DatabaseRow[];
+        winning_bin: number;
+        won_item: DatabaseRow;
+        board_rtp: number;
+      };
+    }>('plinko_play', {
+      bet,
+      idempotency_key: idempotencyKey,
+    });
+  },
+
   async playUpgrader(inputItemId: string, targetItemId: number, idempotencyKey: string) {
     return invoke<{ player: DatabaseRow; result: { won: boolean; chance: number; won_item: DatabaseRow | null } }>('upgrader_play', {
       input_item_id: inputItemId,

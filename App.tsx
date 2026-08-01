@@ -1,7 +1,7 @@
 ﻿
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2, ChevronDown, Gem, Copy, Ban } from 'lucide-react';
+import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2, ChevronDown, Gem, Copy, Ban, CircleDotDashed } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { gameDatabase } from './gameDatabase';
@@ -18,6 +18,8 @@ const ITEM_NAME_KEY = '\u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435';
 const ITEM_PRICE_KEY = '\u0446\u0435\u043d\u0430';
 const ITEM_RARITY_KEY = '\u0440\u0435\u0434\u043a\u043e\u0441\u0442\u044c';
 const BUSINESS_TICK_MS = 60_000;
+const MIN_PLINKO_BET = 100;
+const MAX_PLINKO_BET = 100_000_000;
 const MAX_INVENTORY_ITEMS = 5000;
 const GAME_RTP = 1.01;
 const MIN_BUSINESS_INVESTMENT = 300;
@@ -406,6 +408,21 @@ const getRandomItemNearPrice = (targetPrice: number): BaseItem => {
   }
   return findClosestItemByPrice(targetPrice);
 }
+
+const buildLocalPlinkoPrizes = (bet: number): BaseItem[] => {
+  const weights = [1, 8, 28, 56, 70, 56, 28, 8, 1];
+  const prizes = [6, 2.5, 1.3, 0.95, 0.391, 0.95, 1.3, 2.5, 6]
+    .map(multiplier => findClosestItemByPrice(bet * multiplier));
+  const targetWeightedValue = bet * GAME_RTP * 256;
+  for (let pass = 0; pass < 4; pass += 1) {
+    for (const index of [4, 3, 5, 2, 6, 1, 7, 0, 8]) {
+      const withoutCurrent = prizes.reduce((sum, item, prizeIndex) =>
+        prizeIndex === index ? sum : sum + getItemPrice(item) * weights[prizeIndex], 0);
+      prizes[index] = findClosestItemByPrice(Math.max(1, (targetWeightedValue - withoutCurrent) / weights[index]));
+    }
+  }
+  return prizes;
+};
 
 const casesByType = CASES_DATA.reduce((acc, c) => {
   if (!acc[c.type]) acc[c.type] = [];
@@ -1002,6 +1019,61 @@ const RouletteScreen = ({
   );
 }
 
+const PlinkoBoard = ({ path, prizes, winningBin, finished }: {
+  path: number[];
+  prizes: BaseItem[];
+  winningBin: number | null;
+  finished: boolean;
+}) => {
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    setStep(0);
+    if (!path.length) return;
+    let current = 0;
+    const timer = window.setInterval(() => {
+      current += 1;
+      setStep(Math.min(path.length, current));
+      if (current >= path.length) window.clearInterval(timer);
+    }, 360);
+    return () => window.clearInterval(timer);
+  }, [path]);
+
+  const horizontalStep = 5.2;
+  const horizontalOffset = path.slice(0, step).reduce((sum, direction) => sum + direction, 0) * horizontalStep;
+  const ballTop = 5 + step * 9.55;
+
+  return (
+    <div className="relative w-full max-w-md mx-auto aspect-[4/5] overflow-hidden rounded-lg border border-cyan-400/30 bg-[#071016] shadow-[inset_0_0_45px_rgba(34,211,238,0.06)]">
+      <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-cyan-400/10 to-transparent pointer-events-none" />
+      {Array.from({ length: 8 }, (_, row) => Array.from({ length: row + 1 }, (_, column) => {
+        const left = 50 + (2 * column - row) * horizontalStep;
+        const top = 11 + row * 9.55;
+        return <span key={`${row}-${column}`} className="absolute w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-200 border border-white shadow-[0_0_7px_rgba(103,232,249,0.7)]" style={{ left: `${left}%`, top: `${top}%` }} />;
+      }))}
+      <span
+        className="absolute z-20 w-4 h-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-yellow-300 border-2 border-yellow-50 shadow-[0_0_14px_rgba(253,224,71,0.9)]"
+        style={{
+          left: `${50 + horizontalOffset}%`,
+          top: `${ballTop}%`,
+          transition: step === 0 ? 'none' : 'left 330ms cubic-bezier(.25,.75,.35,1), top 330ms cubic-bezier(.35,.05,.75,.35)',
+        }}
+      />
+      <div className="absolute inset-x-1 bottom-1 grid grid-cols-9 gap-0.5 h-[15%]">
+        {prizes.map((item, index) => {
+          const selected = finished && index === winningBin;
+          return (
+            <div key={`${item.id}-${index}`} className={`min-w-0 flex flex-col items-center justify-center border-t px-0.5 transition-colors ${selected ? 'bg-yellow-400/20 border-yellow-300' : 'bg-slate-950/90 border-cyan-900'}`}>
+              <ItemArtwork item={item} eager className="w-7 h-7 text-xl" />
+              <span className={`mt-0.5 max-w-full truncate text-[7px] font-bold ${selected ? 'text-yellow-300' : 'text-slate-500'}`}>{formatMoney(getItemPrice(item))}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const QuantitySelector = ({ value, onChange }: { value: number, onChange: (val: number) => void }) => {
   const options = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
   const maxIndex = options.length - 1;
@@ -1191,6 +1263,12 @@ export default function App() {
   const [slotsSpinState, setSlotsSpinState] = useState<'IDLE' | 'PRE_SPIN' | 'SPINNING' | 'FINISHED'>('IDLE');
   const [slotsWinItem, setSlotsWinItem] = useState<BaseItem | null>(null);
   const [slotsReelStrips, setSlotsReelStrips] = useState<{item: BaseItem, payout: number}[][]>([[], [], []]);
+  const [plinkoBet, setPlinkoBet] = useState<number>(1000);
+  const [plinkoState, setPlinkoState] = useState<'IDLE' | 'LOADING' | 'DROPPING' | 'FINISHED'>('IDLE');
+  const [plinkoPath, setPlinkoPath] = useState<number[]>([]);
+  const [plinkoBin, setPlinkoBin] = useState<number | null>(null);
+  const [plinkoPrizes, setPlinkoPrizes] = useState<BaseItem[]>([]);
+  const [plinkoWinItem, setPlinkoWinItem] = useState<InventoryItem | null>(null);
   const sellAllInFlightRef = useRef(false);
 
   // Business Game State
@@ -2109,7 +2187,7 @@ export default function App() {
       if (screen === AppScreen.LEADERBOARD) fetchLeaderboard();
     }
     else if (screen === AppScreen.MARKET_MENU || screen === AppScreen.MARKET_OFFER) setActiveTab('market');
-    else if (screen === AppScreen.GAMES_MENU || screen === AppScreen.CASE_LIST || screen === AppScreen.ROCKET_MENU || screen === AppScreen.UPGRADER_MENU || screen === AppScreen.SLOTS_MENU || screen === AppScreen.BUSINESS_MENU) setActiveTab('games');
+    else if (screen === AppScreen.GAMES_MENU || screen === AppScreen.CASE_LIST || screen === AppScreen.ROCKET_MENU || screen === AppScreen.UPGRADER_MENU || screen === AppScreen.SLOTS_MENU || screen === AppScreen.BUSINESS_MENU || screen === AppScreen.PLINKO_MENU || screen === AppScreen.PLINKO_GAME) setActiveTab('games');
   }, [screen]);
 
   const handleTabChange = (tab: string) => {
@@ -2120,6 +2198,53 @@ export default function App() {
     if (tab === 'market') {
       setMarketTabView('MARKET');
       setScreen(AppScreen.MARKET_MENU);
+    }
+  };
+
+  const handlePlinkoStart = async () => {
+    if (plinkoState === 'LOADING') return;
+    const bet = Math.trunc(plinkoBet);
+    if (bet < MIN_PLINKO_BET || bet > MAX_PLINKO_BET) {
+      showToast(`Ставка Plinko: от ${formatMoney(MIN_PLINKO_BET)} до ${formatMoney(MAX_PLINKO_BET)}`);
+      return;
+    }
+    if (inventory.length >= MAX_INVENTORY_ITEMS) { showToast(INVENTORY_LIMIT_MESSAGE); return; }
+    if (balance < bet) { showToast('Недостаточно звезд'); return; }
+
+    setPlinkoState('LOADING');
+    try {
+      let path: number[];
+      let prizes: BaseItem[];
+      let winningBin: number;
+      let wonItem: InventoryItem;
+
+      if (gameDatabase.isOnline()) {
+        const response = await gameDatabase.playPlinko(bet, `plinko_${generateUUID()}`);
+        path = response.result.path;
+        prizes = response.result.prizes.map(item => item as unknown as BaseItem);
+        winningBin = response.result.winning_bin;
+        wonItem = response.result.won_item as unknown as InventoryItem;
+        applyAuthoritativePlayer(response.player as PlayerDbRow);
+      } else {
+        prizes = buildLocalPlinkoPrizes(bet);
+        path = Array.from({ length: 8 }, () => Math.random() < 0.5 ? -1 : 1);
+        winningBin = path.reduce((sum, direction) => sum + (direction > 0 ? 1 : 0), 0);
+        wonItem = { ...prizes[winningBin], uniqueId: generateUUID(), serial: generateSerial(), obtainedAt: Date.now() };
+        setBalance(value => value - bet);
+        applyStatsDelta({ spent: bet, won: getItemPrice(wonItem) });
+        setInventory(items => [wonItem, ...items]);
+      }
+
+      setPlinkoPath(path);
+      setPlinkoPrizes(prizes);
+      setPlinkoBin(winningBin);
+      setPlinkoWinItem(wonItem);
+      setPlinkoState('DROPPING');
+      setScreen(AppScreen.PLINKO_GAME);
+      window.setTimeout(() => setPlinkoState('FINISHED'), 3400);
+    } catch (error) {
+      setPlinkoState('IDLE');
+      showToast(error instanceof Error ? error.message : 'Не удалось запустить Plinko');
     }
   };
 
@@ -3487,7 +3612,7 @@ export default function App() {
         </div>
       </button>
 
-      <button 
+      <button
         onClick={() => setScreen(AppScreen.SLOTS_MENU)}
         className="w-full bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-red-500/50 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
       >
@@ -3497,6 +3622,19 @@ export default function App() {
         <div className="min-w-0 flex-1 text-left">
           <h3 className="text-xl font-bold text-white mb-1">Слоты</h3>
           <p className="text-slate-400 text-sm">Собери 3 предмета и забери награду!</p>
+        </div>
+      </button>
+
+      <button
+        onClick={() => setScreen(AppScreen.PLINKO_MENU)}
+        className="w-full bg-gradient-to-r from-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-700 hover:border-cyan-400/60 transition-all active:scale-95 flex items-center gap-6 shadow-lg group"
+      >
+        <div className="w-20 h-20 shrink-0 bg-slate-950 rounded-xl flex items-center justify-center shadow-inner group-hover:scale-110 transition-transform">
+          <CircleDotDashed className="w-11 h-11 text-cyan-300" />
+        </div>
+        <div className="min-w-0 flex-1 text-left">
+          <h3 className="text-xl font-bold text-white mb-1">Plinko</h3>
+          <p className="text-slate-400 text-sm">Запусти шарик и забери предмет из выигрышной ячейки!</p>
         </div>
       </button>
 
@@ -4011,6 +4149,79 @@ export default function App() {
           </div>
       );
   };
+
+  const renderPlinkoMenu = () => (
+    <div className="flex flex-col h-full bg-slate-950">
+      <div className="p-4 flex items-center gap-2 border-b border-slate-800">
+        <button onClick={() => setScreen(AppScreen.GAMES_MENU)} className="p-2 bg-slate-900 rounded-full hover:bg-slate-800">
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+        <h2 className="text-xl font-bold text-white">Plinko</h2>
+        <div className="ml-auto"><BalanceBadge balance={balance} /></div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 pb-24 flex items-center justify-center">
+        <div className="w-full max-w-sm">
+          <div className="mb-6 text-center">
+            <CircleDotDashed className="w-16 h-16 text-cyan-300 mx-auto mb-3" />
+            <h3 className="text-3xl font-black text-white">PLINKO</h3>
+          </div>
+          <div className="bg-slate-900 border border-slate-700 rounded-lg p-5">
+            <label className="text-xs uppercase text-slate-400 font-bold block mb-2">Ваша ставка</label>
+            <div className="flex items-center gap-2 bg-slate-950 p-3 rounded-lg border border-slate-800 focus-within:border-cyan-400">
+              <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
+              <input type="number" min={MIN_PLINKO_BET} max={MAX_PLINKO_BET} value={plinkoBet}
+                onChange={event => setPlinkoBet(Math.max(0, Math.trunc(Number(event.target.value) || 0)))}
+                className="bg-transparent text-white font-mono text-xl outline-none w-full" />
+            </div>
+            <div className="grid grid-cols-4 gap-2 mt-3">
+              {[100, 1000, 10000, 100000].map(amount => (
+                <button key={amount} onClick={() => setPlinkoBet(amount)} className="py-2 bg-slate-800 rounded-md text-xs font-bold text-slate-300 hover:bg-slate-700">
+                  {amount >= 1000 ? `${amount / 1000}k` : amount}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 text-[11px] text-slate-500">Ставка от {formatMoney(MIN_PLINKO_BET)} до {formatMoney(MAX_PLINKO_BET)} звезд</div>
+            <Button onClick={handlePlinkoStart} disabled={plinkoState === 'LOADING'} className="w-full mt-5 py-4 text-lg">
+              {plinkoState === 'LOADING' ? <Loader2 className="w-5 h-5 animate-spin" /> : 'ЗАПУСТИТЬ ШАРИК'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderPlinkoGame = () => (
+    <div className="flex flex-col h-full bg-slate-950 overflow-hidden">
+      <div className="p-3 flex items-center gap-2 border-b border-slate-800 bg-slate-950 z-10">
+        <button disabled={plinkoState !== 'FINISHED'} onClick={() => { setPlinkoState('IDLE'); setScreen(AppScreen.PLINKO_MENU); }} className="p-2 bg-slate-900 rounded-full disabled:opacity-0">
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+        <div>
+          <h2 className="font-bold text-white">Plinko</h2>
+          <div className="text-[10px] text-slate-500">Ставка: {formatMoney(plinkoBet)} звезд</div>
+        </div>
+        <div className="ml-auto"><BalanceBadge balance={balance} /></div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-3 pb-6">
+        <PlinkoBoard path={plinkoPath} prizes={plinkoPrizes} winningBin={plinkoBin} finished={plinkoState === 'FINISHED'} />
+        <div className="min-h-24 mt-3 flex items-center justify-center text-center">
+          {plinkoState === 'FINISHED' && plinkoWinItem ? (
+            <div className="flex items-center gap-3 bg-slate-900 border border-yellow-400/40 rounded-lg px-4 py-3 max-w-full">
+              <ItemArtwork item={plinkoWinItem} eager className="w-14 h-14 text-4xl shrink-0" />
+              <div className="min-w-0 text-left">
+                <div className="text-[10px] uppercase font-bold text-yellow-400">Ваш приз</div>
+                <div className="font-bold text-white truncate">{getItemName(plinkoWinItem)}</div>
+                <div className="text-sm text-yellow-300 flex items-center gap-1"><Star className="w-3 h-3 fill-yellow-300" />{formatMoney(getItemPrice(plinkoWinItem))}</div>
+              </div>
+            </div>
+          ) : <div className="text-sm text-cyan-200 animate-pulse">Шарик падает...</div>}
+        </div>
+        {plinkoState === 'FINISHED' && (
+          <Button onClick={() => { setPlinkoState('IDLE'); setScreen(AppScreen.PLINKO_MENU); }} className="w-full py-4">ИГРАТЬ ЕЩЁ</Button>
+        )}
+      </div>
+    </div>
+  );
 
   const renderSlotsMenu = () => (
       <div className="flex flex-col h-full bg-slate-950">
@@ -4629,9 +4840,11 @@ export default function App() {
 
       {screen === AppScreen.SLOTS_MENU && renderSlotsMenu()}
       {screen === AppScreen.SLOTS_GAME && renderSlotsGame()}
+      {screen === AppScreen.PLINKO_MENU && renderPlinkoMenu()}
+      {screen === AppScreen.PLINKO_GAME && renderPlinkoGame()}
 
       {/* Bottom Nav */}
-      {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && screen !== AppScreen.CASE_DETAIL && screen !== AppScreen.ROCKET_GAME && screen !== AppScreen.UPGRADER_GAME && screen !== AppScreen.UPGRADER_SELECT_TARGET && screen !== AppScreen.SLOTS_GAME && screen !== AppScreen.MARKET_OFFER && (
+      {screen !== AppScreen.ROULETTE && screen !== AppScreen.DROP_SUMMARY && screen !== AppScreen.CASE_DETAIL && screen !== AppScreen.ROCKET_GAME && screen !== AppScreen.UPGRADER_GAME && screen !== AppScreen.UPGRADER_SELECT_TARGET && screen !== AppScreen.SLOTS_GAME && screen !== AppScreen.PLINKO_GAME && screen !== AppScreen.MARKET_OFFER && (
         <BottomNav activeTab={activeTab} onTabChange={handleTabChange} />
       )}
 

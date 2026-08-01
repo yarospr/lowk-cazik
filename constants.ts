@@ -876,6 +876,7 @@ const calcCaseExpectedValue = (c: Case): number => {
 
 const rebalanceCases = (cases: Case[]): Case[] => {
   return cases.map((c) => {
+    if (c.key === 'trash_case') return { ...c, price: 0, items: c.items.map(drop => ({ ...drop })) };
     const exponent = CASE_CHANCE_EXPONENTS[c.key] ?? 0.7;
     const orderedItems = [...c.items].sort((left, right) => {
       const priceDelta = (ITEM_PRICE_BY_ID.get(left.id) ?? 0) - (ITEM_PRICE_BY_ID.get(right.id) ?? 0);

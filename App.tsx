@@ -1,7 +1,7 @@
 ﻿
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2, ChevronDown, Gem, Copy, Ban, CircleDotDashed } from 'lucide-react';
+import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2, ChevronDown, ChevronLeft, ChevronRight, Gem, Copy, Ban, CircleDotDashed } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
 import { gameDatabase } from './gameDatabase';
@@ -20,6 +20,7 @@ const ITEM_RARITY_KEY = '\u0440\u0435\u0434\u043a\u043e\u0441\u0442\u044c';
 const BUSINESS_TICK_MS = 60_000;
 const MIN_PLINKO_BET = 100;
 const MAX_PLINKO_BET = 100_000_000;
+const MAX_PLINKO_BALLS = 20;
 const MAX_INVENTORY_ITEMS = 5000;
 const GAME_RTP = 1.01;
 const MIN_BUSINESS_INVESTMENT = 300;
@@ -1019,21 +1020,22 @@ const RouletteScreen = ({
   );
 }
 
-const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
-  path: number[];
+const PlinkoBoard = ({ paths, prizes, winningBins, onSettled }: {
+  paths: number[][];
   prizes: BaseItem[];
-  winningBin: number | null;
-  finished: boolean;
+  winningBins: number[];
   onSettled: () => void;
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const onSettledRef = useRef(onSettled);
+  const [landedBallIndexes, setLandedBallIndexes] = useState<number[]>([]);
 
   useEffect(() => { onSettledRef.current = onSettled; }, [onSettled]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || path.length !== 8) return;
+    if (!canvas || paths.length < 1 || paths.some(path => path.length !== 8)) return;
+    setLandedBallIndexes([]);
 
     const width = 360;
     const height = 450;
@@ -1046,33 +1048,43 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
     const contactOffset = ballRadius + pegRadius;
     const floorBallY = 433;
     const gravity = 1100;
-    const pegs = Array.from({ length: 8 }, (_, row) => Array.from({ length: row + 1 }, (_, column) => ({
-      x: centerX + (2 * column - row) * horizontalStep,
+    const pegs = Array.from({ length: 8 }, (_, row) => Array.from({ length: row + 3 }, (_, column) => ({
+      x: centerX + (2 * column - row - 2) * horizontalStep,
       y: firstPegY + row * rowGap,
     }))).flat();
-    let rights = 0;
-    const contacts = path.map((direction, row) => {
-      const point = {
-        x: centerX + (2 * rights - row) * horizontalStep,
-        y: firstPegY + row * rowGap - contactOffset,
+    const profiles = paths.map((path, ballIndex) => {
+      let rights = 0;
+      const contacts = path.map((direction, row) => {
+        const point = {
+          x: centerX + (2 * rights - row) * horizontalStep,
+          y: firstPegY + row * rowGap - contactOffset,
+        };
+        if (direction > 0) rights += 1;
+        return point;
+      });
+      const targetBin = Math.max(0, Math.min(8, winningBins[ballIndex] ?? rights));
+      const initialDuration = 455 + Math.random() * 65;
+      const bounceDurations = Array.from({ length: 7 }, () => 390 + Math.random() * 75);
+      const finalDuration = 625 + Math.random() * 90;
+      return {
+        contacts,
+        targetX: 20 + targetBin * 40,
+        initialDuration,
+        bounceDurations,
+        finalDuration,
+        totalDropDuration: initialDuration + bounceDurations.reduce((sum, duration) => sum + duration, 0) + finalDuration,
+        startX: centerX + (ballIndex - (paths.length - 1) / 2) * 0.18,
       };
-      if (direction > 0) rights += 1;
-      return point;
     });
-    const targetBin = Math.max(0, Math.min(8, winningBin ?? rights));
-    const targetX = 20 + targetBin * 40;
-    const initialDuration = 470 + Math.random() * 40;
-    const bounceDurations = Array.from({ length: 7 }, () => 405 + Math.random() * 45);
-    const finalDuration = 650 + Math.random() * 55;
-    const totalDropDuration = initialDuration + bounceDurations.reduce((sum, duration) => sum + duration, 0) + finalDuration;
     let frame = 0;
     const startedAt = performance.now();
-    let didSettle = false;
+    const settledBalls = new Set<number>();
 
-    const finish = () => {
-      if (didSettle) return;
-      didSettle = true;
-      onSettledRef.current();
+    const finishBall = (index: number) => {
+      if (settledBalls.has(index)) return;
+      settledBalls.add(index);
+      setLandedBallIndexes(Array.from(settledBalls));
+      if (settledBalls.size === profiles.length) onSettledRef.current();
     };
 
     const context = canvas.getContext('2d');
@@ -1114,39 +1126,39 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
       };
     };
 
-    const getBallPosition = (elapsedMs: number) => {
-      const start = { x: centerX, y: 18 };
-      if (elapsedMs < initialDuration) {
-        const progress = Math.max(0, elapsedMs / initialDuration);
+    const getBallPosition = (profile: typeof profiles[number], elapsedMs: number) => {
+      const start = { x: profile.startX, y: 18 };
+      if (elapsedMs < profile.initialDuration) {
+        const progress = Math.max(0, elapsedMs / profile.initialDuration);
         return {
-          x: centerX,
-          y: start.y + (contacts[0].y - start.y) * progress * progress,
+          x: start.x + (profile.contacts[0].x - start.x) * progress,
+          y: start.y + (profile.contacts[0].y - start.y) * progress * progress,
         };
       }
 
-      let cursor = initialDuration;
-      for (let index = 0; index < bounceDurations.length; index += 1) {
-        const duration = bounceDurations[index];
+      let cursor = profile.initialDuration;
+      for (let index = 0; index < profile.bounceDurations.length; index += 1) {
+        const duration = profile.bounceDurations[index];
         if (elapsedMs < cursor + duration) {
-          return ballisticPosition(contacts[index], contacts[index + 1], duration, elapsedMs - cursor);
+          return ballisticPosition(profile.contacts[index], profile.contacts[index + 1], duration, elapsedMs - cursor);
         }
         cursor += duration;
       }
 
-      if (elapsedMs < cursor + finalDuration) {
-        return ballisticPosition(contacts[7], { x: targetX, y: floorBallY }, finalDuration, elapsedMs - cursor);
+      if (elapsedMs < cursor + profile.finalDuration) {
+        return ballisticPosition(profile.contacts[7], { x: profile.targetX, y: floorBallY }, profile.finalDuration, elapsedMs - cursor);
       }
 
-      const bounceElapsed = elapsedMs - totalDropDuration;
+      const bounceElapsed = elapsedMs - profile.totalDropDuration;
       if (bounceElapsed < 520) {
         const progress = bounceElapsed / 520;
-        return { x: targetX, y: floorBallY - Math.sin(Math.PI * progress) * 15 };
+        return { x: profile.targetX, y: floorBallY - Math.sin(Math.PI * progress) * 15 };
       }
       if (bounceElapsed < 850) {
         const progress = (bounceElapsed - 520) / 330;
-        return { x: targetX, y: floorBallY - Math.sin(Math.PI * progress) * 5 };
+        return { x: profile.targetX, y: floorBallY - Math.sin(Math.PI * progress) * 5 };
       }
-      return { x: targetX, y: floorBallY };
+      return { x: profile.targetX, y: floorBallY };
     };
 
     const drawBall = (position: { x: number; y: number }) => {
@@ -1166,8 +1178,10 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
     const tick = (now: number) => {
       draw();
       const elapsed = now - startedAt;
-      drawBall(getBallPosition(elapsed));
-      if (elapsed >= totalDropDuration) finish();
+      profiles.forEach((profile, index) => {
+        drawBall(getBallPosition(profile, elapsed));
+        if (elapsed >= profile.totalDropDuration) finishBall(index);
+      });
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
@@ -1175,14 +1189,24 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [path, winningBin]);
+  }, [paths, winningBins]);
+
+  const landedBinCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    landedBallIndexes.forEach(index => {
+      const bin = winningBins[index];
+      if (Number.isInteger(bin)) counts.set(bin, (counts.get(bin) || 0) + 1);
+    });
+    return counts;
+  }, [landedBallIndexes, winningBins]);
 
   return (
     <div className="relative w-full max-w-md mx-auto aspect-[4/5] overflow-hidden rounded-t-lg border-x border-t border-cyan-400/30 bg-[#071016] shadow-[inset_0_0_45px_rgba(34,211,238,0.06)]">
       <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-cyan-400/10 to-transparent pointer-events-none" />
       <div className="absolute inset-x-0 bottom-0 grid grid-cols-9 h-[19%] z-10">
         {prizes.map((item, index) => {
-          const selected = finished && index === winningBin;
+          const landedCount = landedBinCounts.get(index) || 0;
+          const selected = landedCount > 0;
           return (
             <div key={`${item.id}-${index}`} className={`relative min-w-0 flex flex-col items-center justify-start pt-2 px-0.5 overflow-hidden transition-colors duration-500 ${selected ? 'bg-yellow-400/10' : 'bg-slate-950/70'}`}>
               <div className={`absolute inset-0 pointer-events-none transition-opacity duration-500 ${selected ? 'opacity-100' : 'opacity-0'}`}>
@@ -1190,6 +1214,7 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
               </div>
               <ItemArtwork item={item} eager className="relative z-10 w-7 h-7 text-xl" />
               <span className={`relative z-10 mt-0.5 max-w-full truncate text-[7px] font-bold ${selected ? 'text-yellow-200' : 'text-slate-500'}`}>{formatMoney(getItemPrice(item))}</span>
+              {landedCount > 1 && <span className="absolute z-20 right-0.5 bottom-0.5 min-w-4 h-4 px-0.5 rounded-full bg-yellow-300 text-[7px] font-black text-black flex items-center justify-center">×{landedCount}</span>}
             </div>
           );
         })}
@@ -1389,11 +1414,12 @@ export default function App() {
   const [slotsWinItem, setSlotsWinItem] = useState<BaseItem | null>(null);
   const [slotsReelStrips, setSlotsReelStrips] = useState<{item: BaseItem, payout: number}[][]>([[], [], []]);
   const [plinkoBet, setPlinkoBet] = useState<number>(1000);
+  const [plinkoBallCount, setPlinkoBallCount] = useState<number>(1);
   const [plinkoState, setPlinkoState] = useState<'IDLE' | 'LOADING' | 'DROPPING' | 'FINISHED'>('IDLE');
-  const [plinkoPath, setPlinkoPath] = useState<number[]>([]);
-  const [plinkoBin, setPlinkoBin] = useState<number | null>(null);
+  const [plinkoPaths, setPlinkoPaths] = useState<number[][]>([]);
+  const [plinkoBins, setPlinkoBins] = useState<number[]>([]);
   const [plinkoPrizes, setPlinkoPrizes] = useState<BaseItem[]>([]);
-  const [plinkoWinItem, setPlinkoWinItem] = useState<InventoryItem | null>(null);
+  const [plinkoWinItems, setPlinkoWinItems] = useState<InventoryItem[]>([]);
   const sellAllInFlightRef = useRef(false);
 
   // Business Game State
@@ -2329,41 +2355,47 @@ export default function App() {
   const handlePlinkoStart = async () => {
     if (plinkoState === 'LOADING') return;
     const bet = Math.trunc(plinkoBet);
+    const ballCount = Math.trunc(plinkoBallCount);
     if (bet < MIN_PLINKO_BET || bet > MAX_PLINKO_BET) {
       showToast(`Ставка Plinko: от ${formatMoney(MIN_PLINKO_BET)} до ${formatMoney(MAX_PLINKO_BET)}`);
       return;
     }
-    if (inventory.length >= MAX_INVENTORY_ITEMS) { showToast(INVENTORY_LIMIT_MESSAGE); return; }
-    if (balance < bet) { showToast('Недостаточно звезд'); return; }
+    if (ballCount < 1 || ballCount > MAX_PLINKO_BALLS) {
+      showToast(`Можно запустить от 1 до ${MAX_PLINKO_BALLS} шариков`);
+      return;
+    }
+    if (inventory.length + ballCount > MAX_INVENTORY_ITEMS) { showToast(INVENTORY_LIMIT_MESSAGE); return; }
+    const totalBet = bet * ballCount;
+    if (balance < totalBet) { showToast('Недостаточно звезд'); return; }
 
     setPlinkoState('LOADING');
     try {
-      let path: number[];
+      let paths: number[][];
       let prizes: BaseItem[];
-      let winningBin: number;
-      let wonItem: InventoryItem;
+      let winningBins: number[];
+      let wonItems: InventoryItem[];
 
       if (gameDatabase.isOnline()) {
-        const response = await gameDatabase.playPlinko(bet, `plinko_${generateUUID()}`);
-        path = response.result.path;
+        const response = await gameDatabase.playPlinko(bet, ballCount, `plinko_${generateUUID()}`);
         prizes = response.result.prizes.map(item => item as unknown as BaseItem);
-        winningBin = response.result.winning_bin;
-        wonItem = response.result.won_item as unknown as InventoryItem;
+        paths = response.result.balls.map(ball => ball.path);
+        winningBins = response.result.balls.map(ball => ball.winning_bin);
+        wonItems = response.result.won_items.map(item => item as unknown as InventoryItem);
         applyAuthoritativePlayer(response.player as PlayerDbRow);
       } else {
         prizes = buildLocalPlinkoPrizes(bet);
-        path = Array.from({ length: 8 }, () => Math.random() < 0.5 ? -1 : 1);
-        winningBin = path.reduce((sum, direction) => sum + (direction > 0 ? 1 : 0), 0);
-        wonItem = { ...prizes[winningBin], uniqueId: generateUUID(), serial: generateSerial(), obtainedAt: Date.now() };
-        setBalance(value => value - bet);
-        applyStatsDelta({ spent: bet, won: getItemPrice(wonItem) });
-        setInventory(items => [wonItem, ...items]);
+        paths = Array.from({ length: ballCount }, () => Array.from({ length: 8 }, () => Math.random() < 0.5 ? -1 : 1));
+        winningBins = paths.map(path => path.reduce((sum, direction) => sum + (direction > 0 ? 1 : 0), 0));
+        wonItems = winningBins.map(winningBin => ({ ...prizes[winningBin], uniqueId: generateUUID(), serial: generateSerial(), obtainedAt: Date.now() }));
+        setBalance(value => value - totalBet);
+        applyStatsDelta({ spent: totalBet, won: wonItems.reduce((sum, item) => sum + getItemPrice(item), 0) });
+        setInventory(items => [...wonItems, ...items]);
       }
 
-      setPlinkoPath(path);
+      setPlinkoPaths(paths);
       setPlinkoPrizes(prizes);
-      setPlinkoBin(winningBin);
-      setPlinkoWinItem(wonItem);
+      setPlinkoBins(winningBins);
+      setPlinkoWinItems(wonItems);
       setPlinkoState('DROPPING');
       setScreen(AppScreen.PLINKO_GAME);
     } catch (error) {
@@ -4305,8 +4337,29 @@ export default function App() {
               ))}
             </div>
             <div className="mt-3 text-[11px] text-slate-500">Ставка от {formatMoney(MIN_PLINKO_BET)} до {formatMoney(MAX_PLINKO_BET)} звезд</div>
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase text-slate-400 font-bold">Шарики</div>
+                <div className="mt-1 text-[10px] text-slate-500">Максимум {MAX_PLINKO_BALLS}</div>
+              </div>
+              <div className="flex items-center rounded-lg border border-slate-700 bg-slate-950 overflow-hidden">
+                <button type="button" onClick={() => setPlinkoBallCount(value => Math.max(1, value - 1))} disabled={plinkoBallCount <= 1} className="w-11 h-11 flex items-center justify-center text-slate-300 disabled:text-slate-700 hover:bg-slate-800" aria-label="Уменьшить количество шариков">
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <input type="number" min={1} max={MAX_PLINKO_BALLS} value={plinkoBallCount}
+                  onChange={event => setPlinkoBallCount(Math.max(1, Math.min(MAX_PLINKO_BALLS, Math.trunc(Number(event.target.value) || 1))))}
+                  className="w-14 h-11 bg-transparent border-x border-slate-800 text-center text-lg font-black text-white outline-none" aria-label="Количество шариков" />
+                <button type="button" onClick={() => setPlinkoBallCount(value => Math.min(MAX_PLINKO_BALLS, value + 1))} disabled={plinkoBallCount >= MAX_PLINKO_BALLS} className="w-11 h-11 flex items-center justify-center text-slate-300 disabled:text-slate-700 hover:bg-slate-800" aria-label="Увеличить количество шариков">
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-4 text-sm">
+              <span className="text-slate-400">Общая ставка</span>
+              <span className="flex items-center gap-1 font-black text-yellow-300"><Star className="w-4 h-4 fill-yellow-300" />{formatMoney(plinkoBet * plinkoBallCount)}</span>
+            </div>
             <Button onClick={handlePlinkoStart} disabled={plinkoState === 'LOADING'} className="w-full mt-5 py-4 text-lg">
-              {plinkoState === 'LOADING' ? <Loader2 className="w-5 h-5 animate-spin" /> : 'ЗАПУСТИТЬ ШАРИК'}
+              {plinkoState === 'LOADING' ? <Loader2 className="w-5 h-5 animate-spin" /> : plinkoBallCount === 1 ? 'ЗАПУСТИТЬ ШАРИК' : `ЗАПУСТИТЬ ×${plinkoBallCount}`}
             </Button>
           </div>
         </div>
@@ -4322,29 +4375,41 @@ export default function App() {
         </button>
         <div>
           <h2 className="font-bold text-white">Plinko</h2>
-          <div className="text-[10px] text-slate-500">Ставка: {formatMoney(plinkoBet)} звезд</div>
+          <div className="text-[10px] text-slate-500">{formatMoney(plinkoBet)} × {plinkoBallCount} = {formatMoney(plinkoBet * plinkoBallCount)} звезд</div>
         </div>
         <div className="ml-auto"><BalanceBadge balance={balance} /></div>
       </div>
       <div className="flex-1 overflow-y-auto p-3 pb-6">
         <PlinkoBoard
-          path={plinkoPath}
+          paths={plinkoPaths}
           prizes={plinkoPrizes}
-          winningBin={plinkoBin}
-          finished={plinkoState === 'FINISHED'}
+          winningBins={plinkoBins}
           onSettled={() => setPlinkoState('FINISHED')}
         />
         <div className="min-h-24 mt-3 flex items-center justify-center text-center">
-          {plinkoState === 'FINISHED' && plinkoWinItem ? (
-            <div className="flex items-center gap-3 bg-slate-900 border border-yellow-400/40 rounded-lg px-4 py-3 max-w-full">
-              <ItemArtwork item={plinkoWinItem} eager className="w-14 h-14 text-4xl shrink-0" />
-              <div className="min-w-0 text-left">
-                <div className="text-[10px] uppercase font-bold text-yellow-400">Ваш приз</div>
-                <div className="font-bold text-white truncate">{getItemName(plinkoWinItem)}</div>
-                <div className="text-sm text-yellow-300 flex items-center gap-1"><Star className="w-3 h-3 fill-yellow-300" />{formatMoney(getItemPrice(plinkoWinItem))}</div>
+          {plinkoState === 'FINISHED' && plinkoWinItems.length > 0 ? (
+            <div className="w-full bg-slate-900 border border-yellow-400/40 rounded-lg p-3">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div className="text-left">
+                  <div className="text-[10px] uppercase font-bold text-yellow-400">Получено предметов</div>
+                  <div className="text-xl font-black text-white">{plinkoWinItems.length}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Общая цена</div>
+                  <div className="flex items-center justify-end gap-1 font-black text-yellow-300"><Star className="w-4 h-4 fill-yellow-300" />{formatMoney(plinkoWinItems.reduce((sum, item) => sum + getItemPrice(item), 0))}</div>
+                </div>
+              </div>
+              <div className={`grid gap-2 ${plinkoWinItems.length === 1 ? 'grid-cols-1' : 'grid-cols-4'}`}>
+                {plinkoWinItems.map(item => (
+                  <div key={item.uniqueId} className="min-w-0 bg-slate-950 border border-slate-800 rounded-md p-2 flex flex-col items-center">
+                    <ItemArtwork item={item} eager className="w-10 h-10 text-3xl" />
+                    <div className="mt-1 w-full truncate text-[8px] font-bold text-slate-200">{getItemName(item)}</div>
+                    <div className="text-[8px] text-yellow-300 flex items-center gap-0.5"><Star className="w-2.5 h-2.5 fill-yellow-300" />{formatMoney(getItemPrice(item))}</div>
+                  </div>
+                ))}
               </div>
             </div>
-          ) : <div className="text-sm text-cyan-200 animate-pulse">Шарик падает...</div>}
+          ) : <div className="text-sm text-cyan-200 animate-pulse">{plinkoBallCount === 1 ? 'Шарик падает...' : 'Шарики падают...'}</div>}
         </div>
         {plinkoState === 'FINISHED' && (
           <Button onClick={() => { setPlinkoState('IDLE'); setScreen(AppScreen.PLINKO_MENU); }} className="w-full py-4">ИГРАТЬ ЕЩЁ</Button>

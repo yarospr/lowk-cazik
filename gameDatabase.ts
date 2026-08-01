@@ -142,19 +142,22 @@ export const gameDatabase = {
     });
   },
 
-  async playPlinko(bet: number, idempotencyKey: string) {
+  async playPlinko(bet: number, ballCount: number, idempotencyKey: string) {
     return invoke<{
       player: DatabaseRow;
       result: {
         bet: number;
-        path: number[];
+        ball_count: number;
+        total_bet: number;
         prizes: DatabaseRow[];
-        winning_bin: number;
-        won_item: DatabaseRow;
+        balls: Array<{ path: number[]; winning_bin: number; won_item: DatabaseRow }>;
+        won_items: DatabaseRow[];
+        total_win: number;
         board_rtp: number;
       };
     }>('plinko_play', {
       bet,
+      ball_count: ballCount,
       idempotency_key: idempotencyKey,
     });
   },

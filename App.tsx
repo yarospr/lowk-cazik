@@ -23,6 +23,7 @@ const MAX_PLINKO_BET = 100_000_000;
 const MAX_PLINKO_BALLS = 20;
 const MAX_INVENTORY_ITEMS = 5000;
 const GAME_RTP = 1.01;
+const BUSINESS_RTP = 1.07;
 const MIN_BUSINESS_INVESTMENT = 300;
 const INVENTORY_LIMIT_MESSAGE = '\u041d\u0435\u043b\u044c\u0437\u044f \u0438\u043c\u0435\u0442\u044c \u0431\u043e\u043b\u0435\u0435 5 000 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u043e\u0432';
 const getBundledItemImageUrl = (itemId: number): string => {
@@ -2852,7 +2853,7 @@ export default function App() {
       return;
     }
 
-    const targetTotal = Math.round(investment * GAME_RTP);
+    const targetTotal = Math.round(investment * BUSINESS_RTP);
     const now = Date.now();
 
     setBalance(prev => prev - investment);

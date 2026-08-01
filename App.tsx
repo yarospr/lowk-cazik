@@ -1,6 +1,7 @@
 ﻿
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { Engine, Bodies, Body, Composite, Events } from 'matter-js';
 import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2, ChevronDown, Gem, Copy, Ban, CircleDotDashed } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
@@ -1019,57 +1020,189 @@ const RouletteScreen = ({
   );
 }
 
-const PlinkoBoard = ({ path, prizes, winningBin, finished }: {
+const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
   path: number[];
   prizes: BaseItem[];
   winningBin: number | null;
   finished: boolean;
+  onSettled: () => void;
 }) => {
-  const [step, setStep] = useState(0);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const onSettledRef = useRef(onSettled);
+
+  useEffect(() => { onSettledRef.current = onSettled; }, [onSettled]);
 
   useEffect(() => {
-    setStep(0);
-    if (!path.length) return;
-    let current = 0;
-    const timer = window.setInterval(() => {
-      current += 1;
-      setStep(Math.min(path.length, current));
-      if (current >= path.length) window.clearInterval(timer);
-    }, 360);
-    return () => window.clearInterval(timer);
-  }, [path]);
+    const canvas = canvasRef.current;
+    if (!canvas || path.length !== 8) return;
 
-  const horizontalStep = 5.2;
-  const horizontalOffset = path.slice(0, step).reduce((sum, direction) => sum + direction, 0) * horizontalStep;
-  const ballTop = 5 + step * 9.55;
+    const width = 360;
+    const height = 450;
+    const centerX = width / 2;
+    const horizontalStep = 20;
+    const firstPegY = 56;
+    const rowGap = 39;
+    const engine = Engine.create({ gravity: { x: 0, y: 1.08, scale: 0.001 } });
+    const ball = Bodies.circle(centerX, 18, 8, {
+      label: 'ball',
+      restitution: 0.62,
+      friction: 0.015,
+      frictionAir: 0.0025,
+      density: 0.0018,
+    });
+    const pegs = Array.from({ length: 8 }, (_, row) => Array.from({ length: row + 1 }, (_, column) =>
+      Bodies.circle(centerX + (2 * column - row) * horizontalStep, firstPegY + row * rowGap, 5.5, {
+        isStatic: true,
+        label: `peg:${row}:${column}`,
+        restitution: 0.76,
+        friction: 0,
+      })
+    )).flat();
+    const dividers = Array.from({ length: 10 }, (_, index) =>
+      Bodies.rectangle(index * 40, 401, 3, 78, { isStatic: true, label: 'divider', restitution: 0.42, friction: 0.02 })
+    );
+    const floor = Bodies.rectangle(centerX, 443, width + 20, 8, {
+      isStatic: true,
+      label: 'floor',
+      restitution: 0.52,
+      friction: 0.08,
+    });
+    const leftWall = Bodies.rectangle(-5, height / 2, 10, height, { isStatic: true, label: 'wall' });
+    const rightWall = Bodies.rectangle(width + 5, height / 2, 10, height, { isStatic: true, label: 'wall' });
+    Composite.add(engine.world, [ball, ...pegs, ...dividers, floor, leftWall, rightWall]);
+
+    let nextRow = 0;
+    let frame = 0;
+    let lastFrameAt = performance.now();
+    let settleTimer = 0;
+    let fallbackTimer = 0;
+    let didSettle = false;
+
+    const finish = () => {
+      if (didSettle) return;
+      didSettle = true;
+      settleTimer = window.setTimeout(() => onSettledRef.current(), 850);
+    };
+
+    const collisionHandler = (event: { pairs: Array<{ bodyA: Body; bodyB: Body }> }) => {
+      for (const pair of event.pairs) {
+        const other = pair.bodyA === ball ? pair.bodyB : pair.bodyB === ball ? pair.bodyA : null;
+        if (!other) continue;
+        if (other.label.startsWith('peg:')) {
+          const row = Number(other.label.split(':')[1]);
+          if (row === nextRow) {
+            const direction = path[row] < 0 ? -1 : 1;
+            Body.setPosition(ball, { x: other.position.x, y: other.position.y - 14 });
+            Body.setVelocity(ball, { x: direction * 0.9, y: -0.7 });
+            nextRow += 1;
+          }
+        } else if (other.label === 'floor' && nextRow >= 8) {
+          finish();
+        }
+      }
+    };
+
+    const steeringHandler = () => {
+      if (ball.position.y >= 361) return;
+      const row = Math.min(nextRow, 7);
+      const rightsBeforeRow = path.slice(0, row).reduce((sum, direction) => sum + (direction > 0 ? 1 : 0), 0);
+      const targetX = nextRow < 8
+        ? centerX + (2 * rightsBeforeRow - row) * horizontalStep
+        : centerX + path.reduce((sum, direction) => sum + direction, 0) * horizontalStep;
+      const deltaX = targetX - ball.position.x;
+      const forceX = Math.max(-0.000085, Math.min(0.000085, deltaX * 0.000004));
+      Body.applyForce(ball, ball.position, { x: forceX, y: 0 });
+    };
+
+    Events.on(engine, 'collisionStart', collisionHandler);
+    Events.on(engine, 'beforeUpdate', steeringHandler);
+
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = width * pixelRatio;
+    canvas.height = height * pixelRatio;
+
+    const draw = () => {
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.clearRect(0, 0, width, height);
+
+      context.lineWidth = 2;
+      context.strokeStyle = 'rgba(34,211,238,0.22)';
+      for (let index = 0; index <= 9; index += 1) {
+        context.beginPath();
+        context.moveTo(index * 40, 363);
+        context.lineTo(index * 40, 443);
+        context.stroke();
+      }
+      context.beginPath();
+      context.moveTo(0, 441);
+      context.lineTo(width, 441);
+      context.stroke();
+
+      for (const peg of pegs) {
+        context.beginPath();
+        context.arc(peg.position.x, peg.position.y, 5.5, 0, Math.PI * 2);
+        context.shadowColor = 'rgba(103,232,249,0.8)';
+        context.shadowBlur = 8;
+        context.fillStyle = '#e2e8f0';
+        context.fill();
+      }
+      context.shadowBlur = 0;
+      context.beginPath();
+      context.arc(ball.position.x, ball.position.y, 8, 0, Math.PI * 2);
+      context.shadowColor = 'rgba(253,224,71,0.95)';
+      context.shadowBlur = 14;
+      context.fillStyle = '#fde047';
+      context.fill();
+      context.lineWidth = 2;
+      context.strokeStyle = '#fefce8';
+      context.stroke();
+      context.shadowBlur = 0;
+    };
+
+    const tick = (now: number) => {
+      const delta = Math.min(25, Math.max(12, now - lastFrameAt));
+      lastFrameAt = now;
+      Engine.update(engine, delta);
+      draw();
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    fallbackTimer = window.setTimeout(() => {
+      const fallbackX = centerX + ((winningBin ?? 4) * 2 - 8) * horizontalStep;
+      nextRow = 8;
+      Body.setPosition(ball, { x: fallbackX, y: 382 });
+      Body.setVelocity(ball, { x: 0, y: 2.2 });
+      finish();
+    }, 8000);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(settleTimer);
+      window.clearTimeout(fallbackTimer);
+      Events.off(engine, 'collisionStart', collisionHandler);
+      Events.off(engine, 'beforeUpdate', steeringHandler);
+      Composite.clear(engine.world, false);
+      Engine.clear(engine);
+    };
+  }, [path]);
 
   return (
     <div className="relative w-full max-w-md mx-auto aspect-[4/5] overflow-hidden rounded-lg border border-cyan-400/30 bg-[#071016] shadow-[inset_0_0_45px_rgba(34,211,238,0.06)]">
       <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-cyan-400/10 to-transparent pointer-events-none" />
-      {Array.from({ length: 8 }, (_, row) => Array.from({ length: row + 1 }, (_, column) => {
-        const left = 50 + (2 * column - row) * horizontalStep;
-        const top = 11 + row * 9.55;
-        return <span key={`${row}-${column}`} className="absolute w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-slate-200 border border-white shadow-[0_0_7px_rgba(103,232,249,0.7)]" style={{ left: `${left}%`, top: `${top}%` }} />;
-      }))}
-      <span
-        className="absolute z-20 w-4 h-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-yellow-300 border-2 border-yellow-50 shadow-[0_0_14px_rgba(253,224,71,0.9)]"
-        style={{
-          left: `${50 + horizontalOffset}%`,
-          top: `${ballTop}%`,
-          transition: step === 0 ? 'none' : 'left 330ms cubic-bezier(.25,.75,.35,1), top 330ms cubic-bezier(.35,.05,.75,.35)',
-        }}
-      />
-      <div className="absolute inset-x-1 bottom-1 grid grid-cols-9 gap-0.5 h-[15%]">
+      <div className="absolute inset-x-0 bottom-0 grid grid-cols-9 h-[19%] z-10">
         {prizes.map((item, index) => {
           const selected = finished && index === winningBin;
           return (
-            <div key={`${item.id}-${index}`} className={`min-w-0 flex flex-col items-center justify-center border-t px-0.5 transition-colors ${selected ? 'bg-yellow-400/20 border-yellow-300' : 'bg-slate-950/90 border-cyan-900'}`}>
+            <div key={`${item.id}-${index}`} className={`min-w-0 flex flex-col items-center justify-start pt-2 px-0.5 transition-colors ${selected ? 'bg-yellow-400/20' : 'bg-slate-950/70'}`}>
               <ItemArtwork item={item} eager className="w-7 h-7 text-xl" />
               <span className={`mt-0.5 max-w-full truncate text-[7px] font-bold ${selected ? 'text-yellow-300' : 'text-slate-500'}`}>{formatMoney(getItemPrice(item))}</span>
             </div>
           );
         })}
       </div>
+      <canvas ref={canvasRef} className="absolute inset-0 z-20 w-full h-full pointer-events-none" />
     </div>
   );
 };
@@ -2241,7 +2374,6 @@ export default function App() {
       setPlinkoWinItem(wonItem);
       setPlinkoState('DROPPING');
       setScreen(AppScreen.PLINKO_GAME);
-      window.setTimeout(() => setPlinkoState('FINISHED'), 3400);
     } catch (error) {
       setPlinkoState('IDLE');
       showToast(error instanceof Error ? error.message : 'Не удалось запустить Plinko');
@@ -4203,7 +4335,13 @@ export default function App() {
         <div className="ml-auto"><BalanceBadge balance={balance} /></div>
       </div>
       <div className="flex-1 overflow-y-auto p-3 pb-6">
-        <PlinkoBoard path={plinkoPath} prizes={plinkoPrizes} winningBin={plinkoBin} finished={plinkoState === 'FINISHED'} />
+        <PlinkoBoard
+          path={plinkoPath}
+          prizes={plinkoPrizes}
+          winningBin={plinkoBin}
+          finished={plinkoState === 'FINISHED'}
+          onSettled={() => setPlinkoState('FINISHED')}
+        />
         <div className="min-h-24 mt-3 flex items-center justify-center text-center">
           {plinkoState === 'FINISHED' && plinkoWinItem ? (
             <div className="flex items-center gap-3 bg-slate-900 border border-yellow-400/40 rounded-lg px-4 py-3 max-w-full">
@@ -4540,6 +4678,11 @@ export default function App() {
   };
 
   const renderDropSummary = () => {
+    const totalDropValue = sumItemPrices(droppedItems);
+    const isTrashCase = selectedCase?.key === 'trash_case';
+    const trashRepeatBlocked = Boolean(isTrashCase && (
+      isLoadingTrashCaseLimit || !trashCaseLimit || trashCaseLimit.remaining < openAmount
+    ));
     return (
       <div className="telegram-full-height min-h-0 bg-slate-950 p-3 flex flex-col items-center overflow-y-auto custom-scrollbar">
         <h1 className="text-2xl font-black text-white mb-5 uppercase tracking-widest text-center drop-shadow-[0_0_15px_rgba(255,255,255,0.5)] mt-6">
@@ -4572,17 +4715,35 @@ export default function App() {
                 </div>
               )
            })}
-        </div>
+         </div>
 
-        <div className="mt-auto w-full flex flex-col gap-3 pb-8">
+         {droppedItems.length > 1 && (
+           <div className="w-full mb-5 flex items-center justify-between rounded-lg border border-yellow-400/30 bg-yellow-400/10 px-4 py-3">
+             <span className="text-xs font-black uppercase text-slate-300">Общая цена:</span>
+             <span className="flex items-center gap-1.5 text-lg font-black text-yellow-300">
+               <Star className="w-4 h-4 fill-yellow-300" /> {formatMoney(totalDropValue)}
+             </span>
+           </div>
+         )}
+
+         <div className="mt-auto w-full flex flex-col gap-3 pb-8">
            <Button onClick={() => { setScreen(AppScreen.CASE_LIST); setDroppedItems([]); setSelectedCase(null); setOpenAmount(1); }} variant="secondary" className="w-full">
              К списку кейсов
            </Button>
-           {selectedCase && balance >= selectedCase.price * openAmount && (
-             <Button onClick={() => { setDroppedItems([]); setScreen(AppScreen.ROULETTE); handleOpenCase(); }} className="w-full">
-                Открыть еще раз ({formatMoney(selectedCase.price * openAmount)})
-             </Button>
-           )}
+            {selectedCase && balance >= selectedCase.price * openAmount && (
+              <Button
+                onClick={() => { void handleOpenCase(); }}
+                disabled={isOpeningCase || trashRepeatBlocked}
+                variant={trashRepeatBlocked ? 'secondary' : 'primary'}
+                className="w-full"
+              >
+                 {isOpeningCase
+                   ? <Loader2 className="w-5 h-5 animate-spin" />
+                   : trashRepeatBlocked
+                     ? (trashCaseLimit?.remaining === 0 ? 'ЛИМИТ ЗАКОНЧИЛСЯ' : `ОСТАЛОСЬ ${trashCaseLimit?.remaining ?? 0} ИЗ 100`)
+                     : `Открыть еще раз (${formatMoney(selectedCase.price * openAmount)})`}
+              </Button>
+            )}
         </div>
       </div>
     );

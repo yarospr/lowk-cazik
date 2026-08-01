@@ -1042,7 +1042,7 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
     const horizontalStep = 20;
     const firstPegY = 56;
     const rowGap = 39;
-    const engine = Engine.create({ gravity: { x: 0, y: 1.08, scale: 0.001 } });
+    const engine = Engine.create({ gravity: { x: 0, y: 0.32, scale: 0.001 } });
     const ball = Bodies.circle(centerX, 18, 8, {
       label: 'ball',
       restitution: 0.62,
@@ -1074,14 +1074,13 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
     let nextRow = 0;
     let frame = 0;
     let lastFrameAt = performance.now();
-    let settleTimer = 0;
     let fallbackTimer = 0;
     let didSettle = false;
 
     const finish = () => {
       if (didSettle) return;
       didSettle = true;
-      settleTimer = window.setTimeout(() => onSettledRef.current(), 850);
+      onSettledRef.current();
     };
 
     const collisionHandler = (event: { pairs: Array<{ bodyA: Body; bodyB: Body }> }) => {
@@ -1093,7 +1092,7 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
           if (row === nextRow) {
             const direction = path[row] < 0 ? -1 : 1;
             Body.setPosition(ball, { x: other.position.x, y: other.position.y - 14 });
-            Body.setVelocity(ball, { x: direction * 0.9, y: -0.7 });
+            Body.setVelocity(ball, { x: direction * 0.46, y: -0.34 });
             nextRow += 1;
           }
         } else if (other.label === 'floor' && nextRow >= 8) {
@@ -1110,7 +1109,7 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
         ? centerX + (2 * rightsBeforeRow - row) * horizontalStep
         : centerX + path.reduce((sum, direction) => sum + direction, 0) * horizontalStep;
       const deltaX = targetX - ball.position.x;
-      const forceX = Math.max(-0.000085, Math.min(0.000085, deltaX * 0.000004));
+      const forceX = Math.max(-0.000045, Math.min(0.000045, deltaX * 0.000002));
       Body.applyForce(ball, ball.position, { x: forceX, y: 0 });
     };
 
@@ -1173,13 +1172,12 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
       const fallbackX = centerX + ((winningBin ?? 4) * 2 - 8) * horizontalStep;
       nextRow = 8;
       Body.setPosition(ball, { x: fallbackX, y: 382 });
-      Body.setVelocity(ball, { x: 0, y: 2.2 });
+      Body.setVelocity(ball, { x: 0, y: 1.1 });
       finish();
-    }, 8000);
+    }, 12000);
 
     return () => {
       window.cancelAnimationFrame(frame);
-      window.clearTimeout(settleTimer);
       window.clearTimeout(fallbackTimer);
       Events.off(engine, 'collisionStart', collisionHandler);
       Events.off(engine, 'beforeUpdate', steeringHandler);

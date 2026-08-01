@@ -1,7 +1,6 @@
 ﻿
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Engine, Bodies, Body, Composite, Events } from 'matter-js';
 import { Star, ArrowLeft, User, Box, Check, Gamepad2, Trophy, Banknote, Trash2, AlertTriangle, Rocket, Play, StopCircle, Info, Zap, ArrowUp, Coins, Settings, Loader2, ExternalLink, Link2, RefreshCw, Search, Store, Clock3, EyeOff, SkipForward, PackageOpen, Tag, X, Globe2, ChevronDown, Gem, Copy, Ban, CircleDotDashed } from 'lucide-react';
 import { BaseItem, Case, CaseItemDrop, InventoryItem, AppScreen, PlayerProfile } from './types';
 import { ITEMS_DATA, CASES_DATA, INITIAL_BALANCE } from './constants';
@@ -1042,39 +1041,32 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
     const horizontalStep = 20;
     const firstPegY = 56;
     const rowGap = 39;
-    const engine = Engine.create({ gravity: { x: 0, y: 0.32, scale: 0.001 } });
-    const ball = Bodies.circle(centerX, 18, 8, {
-      label: 'ball',
-      restitution: 0.62,
-      friction: 0.015,
-      frictionAir: 0.0025,
-      density: 0.0018,
+    const ballRadius = 8;
+    const pegRadius = 5.5;
+    const contactOffset = ballRadius + pegRadius;
+    const floorBallY = 433;
+    const gravity = 1100;
+    const pegs = Array.from({ length: 8 }, (_, row) => Array.from({ length: row + 1 }, (_, column) => ({
+      x: centerX + (2 * column - row) * horizontalStep,
+      y: firstPegY + row * rowGap,
+    }))).flat();
+    let rights = 0;
+    const contacts = path.map((direction, row) => {
+      const point = {
+        x: centerX + (2 * rights - row) * horizontalStep,
+        y: firstPegY + row * rowGap - contactOffset,
+      };
+      if (direction > 0) rights += 1;
+      return point;
     });
-    const pegs = Array.from({ length: 8 }, (_, row) => Array.from({ length: row + 1 }, (_, column) =>
-      Bodies.circle(centerX + (2 * column - row) * horizontalStep, firstPegY + row * rowGap, 5.5, {
-        isStatic: true,
-        label: `peg:${row}:${column}`,
-        restitution: 0.76,
-        friction: 0,
-      })
-    )).flat();
-    const dividers = Array.from({ length: 10 }, (_, index) =>
-      Bodies.rectangle(index * 40, 401, 3, 78, { isStatic: true, label: 'divider', restitution: 0.42, friction: 0.02 })
-    );
-    const floor = Bodies.rectangle(centerX, 443, width + 20, 8, {
-      isStatic: true,
-      label: 'floor',
-      restitution: 0.52,
-      friction: 0.08,
-    });
-    const leftWall = Bodies.rectangle(-5, height / 2, 10, height, { isStatic: true, label: 'wall' });
-    const rightWall = Bodies.rectangle(width + 5, height / 2, 10, height, { isStatic: true, label: 'wall' });
-    Composite.add(engine.world, [ball, ...pegs, ...dividers, floor, leftWall, rightWall]);
-
-    let nextRow = 0;
+    const targetBin = Math.max(0, Math.min(8, winningBin ?? rights));
+    const targetX = 20 + targetBin * 40;
+    const initialDuration = 470 + Math.random() * 40;
+    const bounceDurations = Array.from({ length: 7 }, () => 405 + Math.random() * 45);
+    const finalDuration = 650 + Math.random() * 55;
+    const totalDropDuration = initialDuration + bounceDurations.reduce((sum, duration) => sum + duration, 0) + finalDuration;
     let frame = 0;
-    let lastFrameAt = performance.now();
-    let fallbackTimer = 0;
+    const startedAt = performance.now();
     let didSettle = false;
 
     const finish = () => {
@@ -1082,39 +1074,6 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
       didSettle = true;
       onSettledRef.current();
     };
-
-    const collisionHandler = (event: { pairs: Array<{ bodyA: Body; bodyB: Body }> }) => {
-      for (const pair of event.pairs) {
-        const other = pair.bodyA === ball ? pair.bodyB : pair.bodyB === ball ? pair.bodyA : null;
-        if (!other) continue;
-        if (other.label.startsWith('peg:')) {
-          const row = Number(other.label.split(':')[1]);
-          if (row === nextRow) {
-            const direction = path[row] < 0 ? -1 : 1;
-            Body.setPosition(ball, { x: other.position.x, y: other.position.y - 14 });
-            Body.setVelocity(ball, { x: direction * 0.46, y: -0.34 });
-            nextRow += 1;
-          }
-        } else if (other.label === 'floor' && nextRow >= 8) {
-          finish();
-        }
-      }
-    };
-
-    const steeringHandler = () => {
-      if (ball.position.y >= 361) return;
-      const row = Math.min(nextRow, 7);
-      const rightsBeforeRow = path.slice(0, row).reduce((sum, direction) => sum + (direction > 0 ? 1 : 0), 0);
-      const targetX = nextRow < 8
-        ? centerX + (2 * rightsBeforeRow - row) * horizontalStep
-        : centerX + path.reduce((sum, direction) => sum + direction, 0) * horizontalStep;
-      const deltaX = targetX - ball.position.x;
-      const forceX = Math.max(-0.000045, Math.min(0.000045, deltaX * 0.000002));
-      Body.applyForce(ball, ball.position, { x: forceX, y: 0 });
-    };
-
-    Events.on(engine, 'collisionStart', collisionHandler);
-    Events.on(engine, 'beforeUpdate', steeringHandler);
 
     const context = canvas.getContext('2d');
     if (!context) return;
@@ -1134,22 +1093,66 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
         context.lineTo(index * 40, 443);
         context.stroke();
       }
-      context.beginPath();
-      context.moveTo(0, 441);
-      context.lineTo(width, 441);
-      context.stroke();
-
       for (const peg of pegs) {
         context.beginPath();
-        context.arc(peg.position.x, peg.position.y, 5.5, 0, Math.PI * 2);
+        context.arc(peg.x, peg.y, pegRadius, 0, Math.PI * 2);
         context.shadowColor = 'rgba(103,232,249,0.8)';
         context.shadowBlur = 8;
         context.fillStyle = '#e2e8f0';
         context.fill();
       }
+    };
+
+    const ballisticPosition = (start: { x: number; y: number }, end: { x: number; y: number }, durationMs: number, elapsedMs: number) => {
+      const duration = durationMs / 1000;
+      const elapsed = Math.min(duration, Math.max(0, elapsedMs / 1000));
+      const progress = duration > 0 ? elapsed / duration : 1;
+      const initialVelocityY = (end.y - start.y - 0.5 * gravity * duration * duration) / duration;
+      return {
+        x: start.x + (end.x - start.x) * progress,
+        y: start.y + initialVelocityY * elapsed + 0.5 * gravity * elapsed * elapsed,
+      };
+    };
+
+    const getBallPosition = (elapsedMs: number) => {
+      const start = { x: centerX, y: 18 };
+      if (elapsedMs < initialDuration) {
+        const progress = Math.max(0, elapsedMs / initialDuration);
+        return {
+          x: centerX,
+          y: start.y + (contacts[0].y - start.y) * progress * progress,
+        };
+      }
+
+      let cursor = initialDuration;
+      for (let index = 0; index < bounceDurations.length; index += 1) {
+        const duration = bounceDurations[index];
+        if (elapsedMs < cursor + duration) {
+          return ballisticPosition(contacts[index], contacts[index + 1], duration, elapsedMs - cursor);
+        }
+        cursor += duration;
+      }
+
+      if (elapsedMs < cursor + finalDuration) {
+        return ballisticPosition(contacts[7], { x: targetX, y: floorBallY }, finalDuration, elapsedMs - cursor);
+      }
+
+      const bounceElapsed = elapsedMs - totalDropDuration;
+      if (bounceElapsed < 520) {
+        const progress = bounceElapsed / 520;
+        return { x: targetX, y: floorBallY - Math.sin(Math.PI * progress) * 15 };
+      }
+      if (bounceElapsed < 850) {
+        const progress = (bounceElapsed - 520) / 330;
+        return { x: targetX, y: floorBallY - Math.sin(Math.PI * progress) * 5 };
+      }
+      return { x: targetX, y: floorBallY };
+    };
+
+    const drawBall = (position: { x: number; y: number }) => {
       context.shadowBlur = 0;
       context.beginPath();
-      context.arc(ball.position.x, ball.position.y, 8, 0, Math.PI * 2);
+      context.arc(position.x, position.y, ballRadius, 0, Math.PI * 2);
       context.shadowColor = 'rgba(253,224,71,0.95)';
       context.shadowBlur = 14;
       context.fillStyle = '#fde047';
@@ -1161,41 +1164,32 @@ const PlinkoBoard = ({ path, prizes, winningBin, finished, onSettled }: {
     };
 
     const tick = (now: number) => {
-      const delta = Math.min(25, Math.max(12, now - lastFrameAt));
-      lastFrameAt = now;
-      Engine.update(engine, delta);
       draw();
+      const elapsed = now - startedAt;
+      drawBall(getBallPosition(elapsed));
+      if (elapsed >= totalDropDuration) finish();
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
-    fallbackTimer = window.setTimeout(() => {
-      const fallbackX = centerX + ((winningBin ?? 4) * 2 - 8) * horizontalStep;
-      nextRow = 8;
-      Body.setPosition(ball, { x: fallbackX, y: 382 });
-      Body.setVelocity(ball, { x: 0, y: 1.1 });
-      finish();
-    }, 12000);
 
     return () => {
       window.cancelAnimationFrame(frame);
-      window.clearTimeout(fallbackTimer);
-      Events.off(engine, 'collisionStart', collisionHandler);
-      Events.off(engine, 'beforeUpdate', steeringHandler);
-      Composite.clear(engine.world, false);
-      Engine.clear(engine);
     };
-  }, [path]);
+  }, [path, winningBin]);
 
   return (
-    <div className="relative w-full max-w-md mx-auto aspect-[4/5] overflow-hidden rounded-lg border border-cyan-400/30 bg-[#071016] shadow-[inset_0_0_45px_rgba(34,211,238,0.06)]">
+    <div className="relative w-full max-w-md mx-auto aspect-[4/5] overflow-hidden rounded-t-lg border-x border-t border-cyan-400/30 bg-[#071016] shadow-[inset_0_0_45px_rgba(34,211,238,0.06)]">
       <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-cyan-400/10 to-transparent pointer-events-none" />
       <div className="absolute inset-x-0 bottom-0 grid grid-cols-9 h-[19%] z-10">
         {prizes.map((item, index) => {
           const selected = finished && index === winningBin;
           return (
-            <div key={`${item.id}-${index}`} className={`min-w-0 flex flex-col items-center justify-start pt-2 px-0.5 transition-colors ${selected ? 'bg-yellow-400/20' : 'bg-slate-950/70'}`}>
-              <ItemArtwork item={item} eager className="w-7 h-7 text-xl" />
-              <span className={`mt-0.5 max-w-full truncate text-[7px] font-bold ${selected ? 'text-yellow-300' : 'text-slate-500'}`}>{formatMoney(getItemPrice(item))}</span>
+            <div key={`${item.id}-${index}`} className={`relative min-w-0 flex flex-col items-center justify-start pt-2 px-0.5 overflow-hidden transition-colors duration-500 ${selected ? 'bg-yellow-400/10' : 'bg-slate-950/70'}`}>
+              <div className={`absolute inset-0 pointer-events-none transition-opacity duration-500 ${selected ? 'opacity-100' : 'opacity-0'}`}>
+                <div className="plinko-bin-glow absolute inset-x-0 bottom-0 h-full bg-gradient-to-t from-yellow-300/60 via-yellow-400/25 to-transparent" />
+              </div>
+              <ItemArtwork item={item} eager className="relative z-10 w-7 h-7 text-xl" />
+              <span className={`relative z-10 mt-0.5 max-w-full truncate text-[7px] font-bold ${selected ? 'text-yellow-200' : 'text-slate-500'}`}>{formatMoney(getItemPrice(item))}</span>
             </div>
           );
         })}
@@ -1341,7 +1335,7 @@ export default function App() {
   const [isPublishingOffer, setIsPublishingOffer] = useState(false);
   const [isCancellingOffer, setIsCancellingOffer] = useState(false);
   const [isTelegramRequiredForOffer, setIsTelegramRequiredForOffer] = useState(false);
-  const [uiToast, setUiToast] = useState<string | null>(null);
+  const [uiToast, setUiToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [copyFallbackText, setCopyFallbackText] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const pendingOfferIdRef = useRef<string | null>(null);
@@ -2000,8 +1994,8 @@ export default function App() {
     return url.toString();
   }, []);
 
-  const showToast = useCallback((message: string) => {
-    setUiToast(message);
+  const showToast = useCallback((message: string, type: 'success' | 'error' = 'error') => {
+    setUiToast({ message, type });
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => {
       setUiToast(null);
@@ -2012,7 +2006,7 @@ export default function App() {
   const copyText = useCallback(async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      showToast('Ссылка скопирована');
+      showToast('Ссылка скопирована', 'success');
     } catch {
       const textarea = document.createElement('textarea');
       textarea.value = text;
@@ -2022,7 +2016,7 @@ export default function App() {
       textarea.select();
       const copied = document.execCommand('copy');
       textarea.remove();
-      if (copied) showToast('Ссылка скопирована');
+      if (copied) showToast('Ссылка скопирована', 'success');
       else setCopyFallbackText(text);
     }
   }, [showToast]);
@@ -2741,7 +2735,7 @@ export default function App() {
 
   const sellSelected = async () => {
     if (selectedInventoryIds.size === 0) return;
-    const idsToSell = new Set(selectedInventoryIds);
+    const idsToSell = new Set<string>(selectedInventoryIds);
     const totalValue = selectedSellValue;
 
     if (gameDatabase.isOnline()) {
@@ -4947,8 +4941,11 @@ export default function App() {
   return (
     <div className={`telegram-app-frame ${isTelegramFullscreen ? 'telegram-fullscreen-guard' : ''} ${initialOfferId ? 'telegram-offer-entry' : ''} bg-slate-950 text-white font-sans selection:bg-yellow-500/30 max-w-md mx-auto relative border-x border-slate-900 shadow-2xl overflow-x-hidden overflow-y-auto`}>
       {uiToast && createPortal(
-        <div className="telegram-toast fixed left-1/2 z-[220] -translate-x-1/2 px-4 py-3 bg-[#171c22] border border-emerald-400/35 rounded-md shadow-2xl text-xs font-bold text-white flex items-center gap-2" role="status">
-          <Check className="w-4 h-4 text-emerald-300" /> {uiToast}
+        <div className={`telegram-toast fixed left-1/2 z-[220] -translate-x-1/2 px-4 py-3 bg-[#171c22] border rounded-md shadow-2xl text-xs font-bold text-white flex items-center gap-2 ${uiToast.type === 'success' ? 'border-emerald-400/45' : 'border-red-400/55'}`} role="status">
+          {uiToast.type === 'success'
+            ? <Check className="w-4 h-4 text-emerald-300" />
+            : <X className="w-4 h-4 text-red-400" />}
+          {uiToast.message}
         </div>,
         document.body,
       )}

@@ -1414,7 +1414,8 @@ export default function App() {
   const [slotsSpinState, setSlotsSpinState] = useState<'IDLE' | 'PRE_SPIN' | 'SPINNING' | 'FINISHED'>('IDLE');
   const [slotsWinItem, setSlotsWinItem] = useState<BaseItem | null>(null);
   const [slotsReelStrips, setSlotsReelStrips] = useState<{item: BaseItem, payout: number}[][]>([[], [], []]);
-  const [plinkoBet, setPlinkoBet] = useState<number>(1000);
+  const [plinkoBetInput, setPlinkoBetInput] = useState<string>('1000');
+  const plinkoBetValue = Math.max(0, Math.trunc(Number(plinkoBetInput) || 0));
   const [plinkoBallCount, setPlinkoBallCount] = useState<number>(1);
   const [plinkoState, setPlinkoState] = useState<'IDLE' | 'LOADING' | 'DROPPING' | 'FINISHED'>('IDLE');
   const [plinkoPaths, setPlinkoPaths] = useState<number[][]>([]);
@@ -2355,7 +2356,7 @@ export default function App() {
 
   const handlePlinkoStart = async () => {
     if (plinkoState === 'LOADING') return;
-    const bet = Math.trunc(plinkoBet);
+    const bet = plinkoBetValue;
     const ballCount = Math.trunc(plinkoBallCount);
     if (bet < MIN_PLINKO_BET || bet > MAX_PLINKO_BET) {
       showToast(`Ставка Plinko: от ${formatMoney(MIN_PLINKO_BET)} до ${formatMoney(MAX_PLINKO_BET)}`);
@@ -4326,13 +4327,13 @@ export default function App() {
             <label className="text-xs uppercase text-slate-400 font-bold block mb-2">Ваша ставка</label>
             <div className="flex items-center gap-2 bg-slate-950 p-3 rounded-lg border border-slate-800 focus-within:border-cyan-400">
               <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
-              <input type="number" min={MIN_PLINKO_BET} max={MAX_PLINKO_BET} value={plinkoBet}
-                onChange={event => setPlinkoBet(Math.max(0, Math.trunc(Number(event.target.value) || 0)))}
+              <input type="number" min={MIN_PLINKO_BET} max={MAX_PLINKO_BET} value={plinkoBetInput}
+                onChange={event => setPlinkoBetInput(event.target.value)}
                 className="bg-transparent text-white font-mono text-xl outline-none w-full" />
             </div>
             <div className="grid grid-cols-4 gap-2 mt-3">
               {[100, 1000, 10000, 100000].map(amount => (
-                <button key={amount} onClick={() => setPlinkoBet(amount)} className="py-2 bg-slate-800 rounded-md text-xs font-bold text-slate-300 hover:bg-slate-700">
+                <button key={amount} onClick={() => setPlinkoBetInput(String(amount))} className="py-2 bg-slate-800 rounded-md text-xs font-bold text-slate-300 hover:bg-slate-700">
                   {amount >= 1000 ? `${amount / 1000}k` : amount}
                 </button>
               ))}
@@ -4357,7 +4358,7 @@ export default function App() {
             </div>
             <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-4 text-sm">
               <span className="text-slate-400">Общая ставка</span>
-              <span className="flex items-center gap-1 font-black text-yellow-300"><Star className="w-4 h-4 fill-yellow-300" />{formatMoney(plinkoBet * plinkoBallCount)}</span>
+              <span className="flex items-center gap-1 font-black text-yellow-300"><Star className="w-4 h-4 fill-yellow-300" />{formatMoney(plinkoBetValue * plinkoBallCount)}</span>
             </div>
             <Button onClick={handlePlinkoStart} disabled={plinkoState === 'LOADING'} className="w-full mt-5 py-4 text-lg">
               {plinkoState === 'LOADING' ? <Loader2 className="w-5 h-5 animate-spin" /> : plinkoBallCount === 1 ? 'ЗАПУСТИТЬ ШАРИК' : `ЗАПУСТИТЬ ×${plinkoBallCount}`}
@@ -4376,7 +4377,7 @@ export default function App() {
         </button>
         <div>
           <h2 className="font-bold text-white">Plinko</h2>
-          <div className="text-[10px] text-slate-500">{formatMoney(plinkoBet)} × {plinkoBallCount} = {formatMoney(plinkoBet * plinkoBallCount)} звезд</div>
+          <div className="text-[10px] text-slate-500">{formatMoney(plinkoBetValue)} × {plinkoBallCount} = {formatMoney(plinkoBetValue * plinkoBallCount)} звезд</div>
         </div>
         <div className="ml-auto"><BalanceBadge balance={balance} /></div>
       </div>

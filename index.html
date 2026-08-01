@@ -54,6 +54,20 @@
         width: max-content;
         max-width: calc(100vw - 32px);
       }
+      @keyframes plinko-bin-glow-rise {
+        from {
+          opacity: 0;
+          transform: scaleY(0.05);
+        }
+        to {
+          opacity: 1;
+          transform: scaleY(1);
+        }
+      }
+      .plinko-bin-glow {
+        transform-origin: bottom;
+        animation: plinko-bin-glow-rise 520ms ease-out both;
+      }
       .roulette-viewport {
         contain: layout paint style;
         isolation: isolate;
@@ -110,7 +124,7 @@
   }
 }
 </script>
-  <script type="module" crossorigin src="./assets/index-BAJBbFVF.js"></script>
+  <script type="module" crossorigin src="./assets/index-Bkth1Fw0.js"></script>
 </head>
   <body>
     <div id="root"></div>

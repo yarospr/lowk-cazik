@@ -826,69 +826,38 @@ const ITEM_PRICE_BY_ID = new Map<number, number>(
   })
 );
 
-const RARITY_CASE_KEYS = new Set(['epic_case', 'mythic_case', 'legendary_case']);
-const FIXED_PRICE_CASES = new Map<string, number>([
-  ['trash_case', 0],
-  ['hobo_case', 80],
-]);
-const TARGET_RTPS = [1.0, 0.95, 1.07] as const;
+const CASE_TARGET_RTP = 1.01;
 
-const hashString = (input: string): number => {
-  let hash = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-};
-
-const createSeededRandom = (seed: number) => {
-  let state = seed >>> 0;
-  return () => {
-    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
-    return state / 0x100000000;
-  };
-};
-
-const buildScatteredRtpMap = (cases: Case[]): Map<string, number> => {
-  const orderedCases = [...cases].sort((a, b) => hashString(a.key) - hashString(b.key));
-  const totalCases = orderedCases.length;
-
-  const counts = TARGET_RTPS.map(() => Math.floor(totalCases / TARGET_RTPS.length));
-  let remainder = totalCases - counts.reduce((acc, value) => acc + value, 0);
-  const startBucket = hashString('rtp_distribution_seed') % TARGET_RTPS.length;
-  while (remainder > 0) {
-    const idx = (startBucket + remainder - 1) % TARGET_RTPS.length;
-    counts[idx] += 1;
-    remainder -= 1;
-  }
-
-  const pool: number[] = [];
-  TARGET_RTPS.forEach((rtp, idx) => {
-    for (let i = 0; i < counts[idx]; i++) {
-      pool.push(rtp);
-    }
-  });
-
-  const random = createSeededRandom(hashString('rtp_pool_shuffle_seed'));
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1));
-    const tmp = pool[i];
-    pool[i] = pool[j];
-    pool[j] = tmp;
-  }
-
-  const targetByKey = new Map<string, number>();
-  for (let i = 0; i < orderedCases.length; i++) {
-    targetByKey.set(orderedCases[i].key, pool[i] ?? 1.0);
-  }
-  return targetByKey;
+// Lower exponents flatten a case; higher values make expensive drops rarer.
+// The values were selected against the item-price catalog so every case stays
+// near 101% RTP while no cheapest item exceeds a 35% drop chance.
+const CASE_CHANCE_EXPONENTS: Record<string, number> = {
+  trash_case: 0.682,
+  hobo_case: 0.718,
+  jobless_case: 0.687,
+  student_case: 0.698,
+  worker_case: 0.768,
+  middle_class_case: 0.407,
+  pro_case: 1.01,
+  rich_case: 0.712,
+  millionaire_case: 0.696,
+  multi_millionaire_case: 0.734,
+  billionaire_case: 0.601,
+  epic_case: 0.714,
+  mythic_case: 0.793,
+  legendary_case: 0.664,
+  clothes_case: 0.477,
+  tech_case: 0.746,
+  cars_case: 0.712,
+  realty_case: 0.672,
+  sport_case: 0.697,
+  luxury_case: 0.715,
 };
 
 const roundToNearestNice = (value: number): number => {
-  if (!Number.isFinite(value) || value <= 0) return 1;
-  const magnitude = Math.pow(10, Math.max(0, Math.floor(Math.log10(value)) - 1));
-  return Math.max(1, Math.round(value / magnitude) * magnitude);
+  if (!Number.isFinite(value) || value <= 0) return 10;
+  const magnitude = Math.pow(10, Math.max(1, Math.floor(Math.log10(value)) - 1));
+  return Math.max(10, Math.round(value / magnitude) * magnitude);
 };
 
 const calcCaseExpectedValue = (c: Case): number => {
@@ -905,31 +874,27 @@ const calcCaseExpectedValue = (c: Case): number => {
   return chanceSum > 0 ? weighted / chanceSum : 0;
 };
 
-const rebalanceCasePrices = (cases: Case[]): Case[] => {
-  const adjustableCases = cases.filter(
-    (c) => !RARITY_CASE_KEYS.has(c.key) && !FIXED_PRICE_CASES.has(c.key)
-  );
-  const targetRtpByKey = buildScatteredRtpMap(adjustableCases);
-
+const rebalanceCases = (cases: Case[]): Case[] => {
   return cases.map((c) => {
-    const fixedPrice = FIXED_PRICE_CASES.get(c.key);
-    if (typeof fixedPrice === 'number') {
-      return {
-        ...c,
-        price: fixedPrice,
-      };
-    }
-    if (RARITY_CASE_KEYS.has(c.key)) return c;
-
-    const ev = calcCaseExpectedValue(c);
-    const targetRtp = targetRtpByKey.get(c.key) ?? 1.0;
-    const targetPrice = ev / targetRtp;
+    const exponent = CASE_CHANCE_EXPONENTS[c.key] ?? 0.7;
+    const orderedItems = [...c.items].sort((left, right) => {
+      const priceDelta = (ITEM_PRICE_BY_ID.get(left.id) ?? 0) - (ITEM_PRICE_BY_ID.get(right.id) ?? 0);
+      return priceDelta || left.id - right.id;
+    });
+    const weights = orderedItems.map(drop => Math.pow(Math.max(1, ITEM_PRICE_BY_ID.get(drop.id) ?? 1), -exponent));
+    const weightTotal = weights.reduce((sum, weight) => sum + weight, 0);
+    const balancedItems = orderedItems.map((drop, index) => ({
+      id: drop.id,
+      chance_percent: Number(((weights[index] / weightTotal) * 100).toFixed(6)),
+    }));
+    const balancedCase = { ...c, items: balancedItems };
+    const ev = calcCaseExpectedValue(balancedCase);
 
     return {
-      ...c,
-      price: roundToNearestNice(targetPrice),
+      ...balancedCase,
+      price: roundToNearestNice(ev / CASE_TARGET_RTP),
     };
   });
 };
 
-export const CASES_DATA: Case[] = rebalanceCasePrices(RAW_CASES_DATA);
+export const CASES_DATA: Case[] = rebalanceCases(RAW_CASES_DATA);

@@ -111,11 +111,15 @@ export const gameDatabase = {
   },
 
   async openCases(caseKey: string, quantity: number, idempotencyKey: string) {
-    return invoke<{ player: DatabaseRow; result: { drops: DatabaseRow[]; cost: number } }>('open_cases', {
+    return invoke<{ player: DatabaseRow; result: { drops: DatabaseRow[]; cost: number; trash_limit?: DatabaseRow } }>('open_cases', {
       case_key: caseKey,
       quantity,
       idempotency_key: idempotencyKey,
     });
+  },
+
+  async getTrashCaseLimit() {
+    return invoke<{ limit: number; used: number; remaining: number; resets_at: string }>('trash_case_limit');
   },
 
   async sellItems(itemIds: string[], idempotencyKey: string) {

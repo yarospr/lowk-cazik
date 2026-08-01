@@ -19,6 +19,8 @@ const ITEM_PRICE_KEY = '\u0446\u0435\u043d\u0430';
 const ITEM_RARITY_KEY = '\u0440\u0435\u0434\u043a\u043e\u0441\u0442\u044c';
 const BUSINESS_TICK_MS = 60_000;
 const MAX_INVENTORY_ITEMS = 5000;
+const GAME_RTP = 1.01;
+const MIN_BUSINESS_INVESTMENT = 300;
 const INVENTORY_LIMIT_MESSAGE = '\u041d\u0435\u043b\u044c\u0437\u044f \u0438\u043c\u0435\u0442\u044c \u0431\u043e\u043b\u0435\u0435 5 000 \u043f\u0440\u0435\u0434\u043c\u0435\u0442\u043e\u0432';
 const getBundledItemImageUrl = (itemId: number): string => {
   return Number.isInteger(itemId) && itemId > 0
@@ -135,6 +137,26 @@ const getItemImageUrl = (item: BaseItem): string => {
     }
   }
   return '';
+};
+
+type TrashCaseLimitState = {
+  limit: number;
+  used: number;
+  remaining: number;
+  resetsAt: number;
+};
+
+const getNextHourTimestamp = (now = Date.now()) => {
+  const next = new Date(now);
+  next.setMinutes(60, 0, 0);
+  return next.getTime();
+};
+
+const formatLimitCountdown = (milliseconds: number) => {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
 
 const ItemArtwork = React.memo(({
@@ -272,10 +294,19 @@ const normalizeBusinessState = (raw: unknown): BusinessState => {
   };
 };
 
-const createBusinessReward = (investment: number, obtainedAt: number): BusinessRewardNotice => {
+const findItemAtOrBelowPrice = (targetPrice: number): BaseItem => {
+  const eligible = ALL_ITEMS
+    .filter(item => getItemPrice(item) <= targetPrice)
+    .sort((left, right) => getItemPrice(right) - getItemPrice(left));
+  return eligible[0] || ALL_ITEMS.reduce((cheapest, item) =>
+    getItemPrice(item) < getItemPrice(cheapest) ? item : cheapest
+  );
+};
+
+const createBusinessReward = (investment: number, remainingValue: number, obtainedAt: number): BusinessRewardNotice => {
   const percent = Math.floor(Math.random() * 20) + 1;
-  const targetPrice = Math.max(1, Math.floor((investment * percent) / 100));
-  const closest = findClosestItemByPrice(targetPrice);
+  const targetPrice = Math.min(Math.max(1, remainingValue), Math.max(1, Math.floor((investment * percent) / 100)));
+  const closest = findItemAtOrBelowPrice(targetPrice);
 
   const item: InventoryItem = {
     ...closest,
@@ -297,7 +328,7 @@ const simulateBusinessCatchup = (state: BusinessState, now: number): { nextState
     return { nextState: state, rewards: [] };
   }
 
-  const reward = createBusinessReward(state.investment, state.nextDropAt);
+  const reward = createBusinessReward(state.investment, state.targetTotal - state.earnedTotal, state.nextDropAt);
   const rewardPrice = getItemPrice(reward.item);
   const earnedTotal = state.earnedTotal + rewardPrice;
 
@@ -868,7 +899,11 @@ const Roulette: React.FC<{
                 '--rarity-particle': palette.particleColor,
               }}
             >
-              {!compact && <div className="text-[9px] text-slate-500 w-full text-right px-1.5 pt-1">{chance.toFixed(2)}%</div>}
+              <div className={compact
+                ? 'absolute right-1 top-1 text-[7px] font-bold text-white/55'
+                : 'text-[9px] text-slate-500 w-full text-right px-1.5 pt-1'}>
+                {chance.toFixed(2)}%
+              </div>
               <ItemArtwork item={item} eager className={compact ? 'text-3xl w-10 h-10 mt-3' : 'text-5xl w-16 h-16'} />
               <div className={`w-full text-center leading-tight font-bold text-slate-200 truncate ${compact ? 'text-[8px] px-1 pb-1' : 'text-[9px] px-1.5 pb-2'}`}>
                 {getItemName(item)}
@@ -1069,6 +1104,9 @@ export default function App() {
   const [selectedCase, setSelectedCase] = useState<Case | null>(null);
   const [droppedItems, setDroppedItems] = useState<InventoryItem[]>([]);
   const [isOpeningCase, setIsOpeningCase] = useState(false);
+  const [trashCaseLimit, setTrashCaseLimit] = useState<TrashCaseLimitState | null>(null);
+  const [isLoadingTrashCaseLimit, setIsLoadingTrashCaseLimit] = useState(false);
+  const [trashLimitClockMs, setTrashLimitClockMs] = useState(Date.now());
   
   const [activeTab, setActiveTab] = useState('games');
   const [openAmount, setOpenAmount] = useState(1);
@@ -1418,11 +1456,53 @@ export default function App() {
     setInitializationAttempt(previous => previous + 1);
   };
 
+  const refreshTrashCaseLimit = useCallback(async () => {
+    setIsLoadingTrashCaseLimit(true);
+    try {
+      if (gameDatabase.isOnline()) {
+        const limit = await gameDatabase.getTrashCaseLimit();
+        setTrashCaseLimit({
+          limit: Math.max(1, Math.floor(toSafeNumber(limit.limit) || 100)),
+          used: Math.max(0, Math.floor(toSafeNumber(limit.used))),
+          remaining: Math.max(0, Math.floor(toSafeNumber(limit.remaining))),
+          resetsAt: new Date(limit.resets_at).getTime(),
+        });
+      } else {
+        setTrashCaseLimit(previous => previous && previous.resetsAt > Date.now() ? previous : {
+          limit: 100,
+          used: 0,
+          remaining: 100,
+          resetsAt: getNextHourTimestamp(),
+        });
+      }
+    } catch (error) {
+      console.error('Failed to load trash case limit', error);
+    } finally {
+      setTrashLimitClockMs(Date.now());
+      setIsLoadingTrashCaseLimit(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedCase?.key !== 'trash_case' || screen !== AppScreen.CASE_DETAIL) return;
+    void refreshTrashCaseLimit();
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setTrashLimitClockMs(now);
+      setTrashCaseLimit(previous => {
+        if (!previous || previous.resetsAt > now) return previous;
+        window.setTimeout(() => { void refreshTrashCaseLimit(); }, 0);
+        return { limit: 100, used: 0, remaining: 100, resetsAt: getNextHourTimestamp(now) };
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [refreshTrashCaseLimit, screen, selectedCase?.key]);
+
   const grantBusinessReward = useCallback((dropAt = Date.now()) => {
     setBusinessState(prev => {
       if (!prev.active || prev.pendingReward || prev.nextDropAt === null) return prev;
 
-      const reward = createBusinessReward(prev.investment, dropAt);
+      const reward = createBusinessReward(prev.investment, prev.targetTotal - prev.earnedTotal, dropAt);
       const rewardPrice = getItemPrice(reward.item);
       const earnedTotal = prev.earnedTotal + rewardPrice;
 
@@ -2079,7 +2159,7 @@ export default function App() {
       const variants = multipliers.map(multiplier => getRandomItemNearPrice(slotsBet * multiplier));
       variantData = variants.map(item => ({ item, payout: getItemPrice(item) }));
       const sumPrices = variantData.reduce((acc, variant) => acc + variant.payout, 0);
-      const totalWinProb = 4 * ((0.97 * slotsBet) / sumPrices);
+      const totalWinProb = Math.min(0.99, 4 * ((GAME_RTP * slotsBet) / sumPrices));
       const roll = Math.random();
       if (roll < totalWinProb) winnerIndex = Math.min(3, Math.floor((roll / totalWinProb) * 4));
       if (winnerIndex !== -1) {
@@ -2135,7 +2215,7 @@ export default function App() {
     if (!upgraderBetItem || !upgraderTargetItem) return;
     setUpgraderSpinState('SPINNING');
 
-    let chance = getItemPrice(upgraderBetItem) / getItemPrice(upgraderTargetItem);
+    let chance = Math.min(1, (getItemPrice(upgraderBetItem) * GAME_RTP) / getItemPrice(upgraderTargetItem));
     let isWin: boolean;
     if (gameDatabase.isOnline()) {
       try {
@@ -2178,7 +2258,7 @@ export default function App() {
   const handleUpgraderComplete = () => {
     if (!upgraderBetItem || !upgraderTargetItem) return;
 
-    const chance = getItemPrice(upgraderBetItem) / getItemPrice(upgraderTargetItem);
+    const chance = Math.min(1, (getItemPrice(upgraderBetItem) * GAME_RTP) / getItemPrice(upgraderTargetItem));
     const winSectorDegrees = 360 * chance;
     const normalizedAngle = upgraderRotation % 360;
     const isWin = upgraderServerResultRef.current?.won ?? normalizedAngle <= winSectorDegrees;
@@ -2230,8 +2310,8 @@ export default function App() {
     } else {
       applyStatsDelta({ spent: getItemPrice(rocketBetItem) });
       const r = Math.random();
-      const crash = 1.00 / (1 - r);
-      rocketCrashPointRef.current = Math.max(1.00, crash);
+      const crash = GAME_RTP / (1 - r);
+      rocketCrashPointRef.current = Math.max(GAME_RTP, crash);
       setRocketCrashPoint(rocketCrashPointRef.current);
       rocketStartTimeRef.current = Date.now();
     }
@@ -2318,6 +2398,16 @@ export default function App() {
   const handleOpenCase = async () => {
     if (!selectedCase || isOpeningCase) return;
     const totalCost = selectedCase.price * openAmount;
+    const isTrashCase = selectedCase.key === 'trash_case';
+
+    if (isTrashCase && (!trashCaseLimit || isLoadingTrashCaseLimit)) {
+      showToast('Загружаем лимит мусорных кейсов');
+      return;
+    }
+    if (isTrashCase && trashCaseLimit && openAmount > trashCaseLimit.remaining) {
+      showToast(`Можно открыть ещё ${trashCaseLimit.remaining} из 100 до следующего часа`);
+      return;
+    }
 
     if (inventory.length + openAmount > MAX_INVENTORY_ITEMS) {
       showToast(INVENTORY_LIMIT_MESSAGE);
@@ -2335,10 +2425,21 @@ export default function App() {
         const response = await gameDatabase.openCases(selectedCase.key, openAmount, `cases_${generateUUID()}`);
         const drops = response.result.drops.map(item => item as unknown as InventoryItem);
         applyAuthoritativePlayer(response.player as PlayerDbRow);
+        const serverLimit = response.result.trash_limit;
+        if (isTrashCase && serverLimit) {
+          setTrashCaseLimit({
+            limit: Math.max(1, Math.floor(toSafeNumber(serverLimit.limit) || 100)),
+            used: Math.max(0, Math.floor(toSafeNumber(serverLimit.used))),
+            remaining: Math.max(0, Math.floor(toSafeNumber(serverLimit.remaining))),
+            resetsAt: new Date(String(serverLimit.resets_at || '')).getTime(),
+          });
+          setTrashLimitClockMs(Date.now());
+        }
         setDroppedItems(drops);
         setScreen(AppScreen.ROULETTE);
       } catch (error) {
         showToast(error instanceof Error ? error.message : 'Не удалось открыть кейс');
+        if (isTrashCase) void refreshTrashCaseLimit();
       } finally {
         setIsOpeningCase(false);
       }
@@ -2366,6 +2467,13 @@ export default function App() {
       spent: totalCost,
       won: wonTotal,
     });
+    if (isTrashCase) {
+      setTrashCaseLimit(previous => previous ? {
+        ...previous,
+        used: previous.used + openAmount,
+        remaining: Math.max(0, previous.remaining - openAmount),
+      } : previous);
+    }
     
     setDroppedItems(newItems);
     setScreen(AppScreen.ROULETTE);
@@ -2439,8 +2547,9 @@ export default function App() {
     }
     const parsed = Math.floor(toSafeNumber(businessInvestmentInput));
     const investment = Number.isFinite(parsed) ? parsed : 0;
-    if (investment < 1) {
-      setBusinessInvestmentInput('1');
+    if (investment < MIN_BUSINESS_INVESTMENT) {
+      setBusinessInvestmentInput(String(MIN_BUSINESS_INVESTMENT));
+      showToast(`Минимальный вклад — ${MIN_BUSINESS_INVESTMENT} звезд`);
       return;
     }
     if (balance < investment) {
@@ -2462,8 +2571,7 @@ export default function App() {
       return;
     }
 
-    const targetMultiplier = 0.8 + Math.random() * 0.6;
-    const targetTotal = Math.max(1, Math.round(investment * targetMultiplier));
+    const targetTotal = Math.round(investment * GAME_RTP);
     const now = Date.now();
 
     setBalance(prev => prev - investment);
@@ -2508,7 +2616,7 @@ export default function App() {
     applyStatsDelta({ won: getItemPrice(pending.item) });
     setBusinessState(prev => {
       if (!prev.active || !prev.pendingReward) return prev;
-      const completed = prev.earnedTotal > prev.targetTotal;
+      const completed = prev.earnedTotal >= prev.targetTotal;
       return {
         ...prev,
         active: !completed,
@@ -3411,7 +3519,7 @@ export default function App() {
     const canStart = !businessState.active;
     const parsedInvestment = Math.floor(toSafeNumber(businessInvestmentInput));
     const normalizedInvestment = Number.isFinite(parsedInvestment) ? parsedInvestment : 0;
-    const hasValidInvestment = normalizedInvestment >= 1;
+    const hasValidInvestment = normalizedInvestment >= MIN_BUSINESS_INVESTMENT;
     const hasEnoughBalance = balance >= normalizedInvestment;
     const canStartBusiness = canStart && hasValidInvestment && hasEnoughBalance;
     const pendingReward = businessState.pendingReward;
@@ -3761,7 +3869,7 @@ export default function App() {
                     <div className="text-center py-10 text-slate-500">Нет доступных улучшений (этот предмет слишком дорогой)</div>
                 ) : (
                     targets.map(target => {
-                        const chance = (getItemPrice(upgraderBetItem) / getItemPrice(target)) * 100;
+                        const chance = Math.min(100, ((getItemPrice(upgraderBetItem) * GAME_RTP) / getItemPrice(target)) * 100);
                         const rarityCol = getRarityColor(getItemRarity(target));
                         
                         return (
@@ -3802,7 +3910,7 @@ export default function App() {
   const renderUpgraderGame = () => {
       if (!upgraderBetItem || !upgraderTargetItem) return null;
 
-      const chance = getItemPrice(upgraderBetItem) / getItemPrice(upgraderTargetItem);
+      const chance = Math.min(1, (getItemPrice(upgraderBetItem) * GAME_RTP) / getItemPrice(upgraderTargetItem));
       const percent = (chance * 100).toFixed(2);
       
       const r = 100;
@@ -4129,6 +4237,11 @@ export default function App() {
 
   const renderCaseDetail = () => {
     if (!selectedCase) return null;
+    const isTrashCase = selectedCase.key === 'trash_case';
+    const trashLimitExceeded = isTrashCase && Boolean(trashCaseLimit && openAmount > trashCaseLimit.remaining);
+    const trashLimitCountdown = trashCaseLimit
+      ? formatLimitCountdown(trashCaseLimit.resetsAt - trashLimitClockMs)
+      : '--:--';
     
     const drops = selectedCase.items
       .map(drop => {
@@ -4188,9 +4301,23 @@ export default function App() {
         </div>
 
         <div className="fixed bottom-0 left-0 w-full bg-slate-900/95 backdrop-blur-md p-4 border-t border-slate-800 shadow-[0_-10px_40px_rgba(0,0,0,0.5)] z-40 max-w-md mx-auto right-0">
+          {isTrashCase && (
+            <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-amber-400/25 bg-amber-400/10 px-3 py-2">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-amber-200/70">Почасовой лимит</div>
+                <div className="text-sm font-black text-amber-200">
+                  Осталось: {isLoadingTrashCaseLimit || !trashCaseLimit ? '…' : `${trashCaseLimit.remaining}/100`}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">До обновления</div>
+                <div className="font-mono text-sm font-bold text-white">{trashLimitCountdown}</div>
+              </div>
+            </div>
+          )}
           <QuantitySelector value={openAmount} onChange={setOpenAmount} />
-          <Button onClick={handleOpenCase} className="w-full py-4 text-lg" disabled={isOpeningCase || balance < selectedCase.price * openAmount}>
-            {isOpeningCase ? <Loader2 className="w-5 h-5 animate-spin" /> : balance < selectedCase.price * openAmount ? "Недостаточно звезд" : (
+          <Button onClick={handleOpenCase} className="w-full py-4 text-lg" disabled={isOpeningCase || balance < selectedCase.price * openAmount || (isTrashCase && (isLoadingTrashCaseLimit || !trashCaseLimit || trashLimitExceeded))}>
+            {isOpeningCase ? <Loader2 className="w-5 h-5 animate-spin" /> : trashLimitExceeded ? `Осталось ${trashCaseLimit?.remaining || 0} из 100` : balance < selectedCase.price * openAmount ? "Недостаточно звезд" : (
                <span className="flex items-center gap-2">
                  Открыть {openAmount} за <Star className="w-5 h-5 fill-black" /> {formatMoney(selectedCase.price * openAmount)}
                </span>
